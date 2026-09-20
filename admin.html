@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Product Management | AIFRET</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="assets/css/styles.css" />
+  </head>
+  <body class="admin-page">
+    <header class="site-header">
+      <div class="container header-inner">
+        <a href="index.html" class="brand" aria-label="AIFRET home"><span class="brand-mark">A</span><span class="brand-word">AIFRET</span></a>
+        <div class="header-tools"><span class="admin-header-label">Local product management</span><a href="index.html" class="btn btn-secondary btn-small">Back to site</a></div>
+      </div>
+    </header>
+
+    <main class="container admin-shell">
+      <div class="admin-intro">
+        <span class="section-kicker">Private local tool</span>
+        <h1>Product management</h1>
+        <p>Add or edit demo products and their marketplace offers. Changes are saved only in this browser.</p>
+      </div>
+
+      <div class="admin-layout">
+        <section class="admin-panel">
+          <div class="admin-panel-heading"><div><span class="section-kicker">Catalog entry</span><h2 data-admin-form-title>Add product</h2></div><button type="button" class="btn btn-secondary btn-small" data-admin-reset>Clear form</button></div>
+          <form data-admin-form novalidate>
+            <div class="admin-form-grid">
+              <label>Product name<input name="name" type="text" required placeholder="Example Smartphone" /></label>
+              <label>Category<select name="category" data-admin-category required><option value="">Select category</option></select></label>
+              <label>Brand<input name="brand" type="text" required placeholder="Example brand" /></label>
+              <label>Image URL<input name="imageUrl" type="url" placeholder="https://example.com/product-image.jpg" /></label>
+              <label class="admin-full">Upload product image<input data-admin-image-file type="file" accept="image/*" /></label>
+              <label class="admin-full">Description<textarea name="description" rows="4" required placeholder="Describe the demo product."></textarea></label>
+            </div>
+            <img class="admin-image-preview" data-admin-image-preview alt="Selected product preview" hidden />
+
+            <div class="admin-offer-heading admin-offer-section-heading"><div><span class="section-kicker">Marketplace offers</span><h3>Offer details</h3></div><button type="button" class="btn btn-secondary btn-small" data-add-offer>Add marketplace offer</button></div>
+            <div data-admin-offers></div>
+            <div class="admin-form-footer"><button type="submit" class="btn btn-primary" data-admin-submit>Save product</button><p data-admin-status role="status">Demo data only. No live prices or affiliate credentials.</p></div>
+          </form>
+        </section>
+
+        <aside class="admin-panel admin-catalog-panel">
+          <div class="admin-panel-heading"><div><span class="section-kicker">Stored locally</span><h2>Catalog products</h2></div><span class="admin-storage-badge">localStorage</span></div>
+          <div class="admin-product-list" data-admin-product-list></div>
+        </aside>
+      </div>
+    </main>
+
+    <script src="assets/js/config.js"></script>
+    <script src="assets/js/admin.js"></script>
+  </body>
+</html>

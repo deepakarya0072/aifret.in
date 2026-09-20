@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Compare demo marketplace offers across AIFRET products." />
+    <title>Compare Prices | AIFRET</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="assets/css/styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="container header-inner">
+        <a href="index.html" class="brand" aria-label="AIFRET home"><span class="brand-mark">A</span><span class="brand-word">AIFRET</span></a>
+        <nav class="site-nav" data-site-nav aria-label="Main navigation">
+          <a href="index.html">Home</a><a href="deals.html">Deals</a><a href="deals.html?category=electronics">Categories</a><a href="compare.html">Compare Prices</a><a href="index.html#marketplaces">Marketplace</a>
+        </nav>
+        <div class="header-tools"><a href="deals.html" class="btn btn-primary">Explore deals</a></div>
+        <button class="nav-toggle" type="button" data-nav-toggle aria-label="Open navigation menu" aria-expanded="false">☰</button>
+      </div>
+    </header>
+
+    <main class="container compare-page">
+      <div class="page-header">
+        <span class="section-kicker">Compare prices</span>
+        <h1>Find the best available offer</h1>
+        <p>Compare demo marketplace listings for each product. Prices and availability are placeholders until live feeds are connected.</p>
+      </div>
+
+      <div class="compare-controls" aria-label="Compare price filters">
+        <label>Search<input type="search" data-compare-search placeholder="Search products or brands" /></label>
+        <label>Category<select data-compare-category><option value="all">All categories</option></select></label>
+        <label>Store<select data-compare-marketplace><option value="all">All stores</option></select></label>
+        <label>Sort<select data-compare-sort><option value="featured">Featured</option><option value="price-asc">Price: Low to High</option><option value="price-desc">Price: High to Low</option><option value="discount">Discount</option><option value="rating">Rating</option></select></label>
+      </div>
+
+      <section class="compare-page-grid" data-compare-page-grid></section>
+    </main>
+
+    <footer class="site-footer"><div class="container footer-bottom"><span>© 2026 AIFRET</span><span>Demo affiliate comparison experience</span></div></footer>
+    <script src="assets/js/config.js"></script>
+    <script src="assets/js/app.js"></script>
+    <script>
+      document.querySelector('[data-compare-category]').insertAdjacentHTML('beforeend', window.AIFRET_CONFIG.categories.map((item) => `<option value="${item.slug}">${item.name}</option>`).join(''));
+      document.querySelector('[data-compare-marketplace]').insertAdjacentHTML('beforeend', window.AIFRET_CONFIG.marketplaces.map((item) => `<option value="${item.slug}">${item.name}</option>`).join(''));
+    </script>
+  </body>
+</html>
