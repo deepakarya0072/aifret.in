@@ -31,6 +31,37 @@ function getQueryParam(name) {
   return params.get(name);
 }
 
+function isValidAffiliateUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch (error) {
+    return false;
+  }
+}
+
+function isValidMediaUrl(value) {
+  return /^https?:\/\//i.test(value || '');
+}
+
+function supportsPhotoPreview(product) {
+  return ['fashion', 'shoes', 'beauty', 'watches', 'jewellery', 'accessories'].includes((product.slug || product.category || '').toLowerCase());
+}
+
+function getCustomerLoginUrl(returnTo) {
+  return `login.html?returnTo=${encodeURIComponent(returnTo)}`;
+}
+
+async function requireCustomerSession(actionUrl) {
+  try {
+    await window.AIFRET_AUTH.session();
+    return true;
+  } catch (error) {
+    window.location.href = getCustomerLoginUrl(actionUrl);
+    return false;
+  }
+}
+
 function normalizeProduct(product) {
   const firstOffer = (product.comparison || [])[0] || {};
 
@@ -55,8 +86,9 @@ function normalizeProduct(product) {
         ...entry,
         marketplaceSlug,
         marketplace: entry.storeName || entry.marketplace || (marketplaceFound ? marketplaceFound.name : 'Amazon'),
-        url: config.affiliateLinks?.[marketplaceSlug] || entry.url || '#',
-        buyUrl: entry.affiliateUrl || entry.productUrl || entry.url || config.affiliateLinks?.[marketplaceSlug] || '#',
+        url: entry.productUrl || entry.url || '#',
+        buyUrl: isValidAffiliateUrl(entry.affiliateUrl) ? entry.affiliateUrl : '',
+        affiliateConfigured: isValidAffiliateUrl(entry.affiliateUrl),
         availability: entry.availability || 'Demo listing'
       };
     })
@@ -70,8 +102,8 @@ function getBestOffer(product) {
     marketplace: 'Amazon',
     price: product.price,
     discount: product.discount,
-    url: config.affiliateLinks?.amazon || '#',
-    buyUrl: config.affiliateLinks?.amazon || '#'
+    url: product.productUrl || '#',
+    buyUrl: isValidAffiliateUrl(product.affiliateUrl) ? product.affiliateUrl : ''
   };
 }
 
@@ -114,6 +146,7 @@ function renderMarketplaceCards() {
 function renderProductCard(product, mode = 'featured') {
   const bestOffer = getBestOffer(product);
   const isCompact = mode === 'compact';
+  const hasProductVideo = product.videoStatus === 'ready' && isValidMediaUrl(product.productVideoUrl);
 
   return `
     <article class="${isCompact ? 'deal-card' : 'product-card'}">
@@ -123,7 +156,7 @@ function renderProductCard(product, mode = 'featured') {
       <div class="card-body">
         <div class="card-top-line">
           <span class="product-tag">${product.category}</span>
-          <button class="mini-wishlist" type="button" aria-label="Add ${product.name} to wishlist">♡</button>
+          <div class="card-indicators">${hasProductVideo ? '<span class="ai-video-badge">▶ AI Video</span>' : ''}<button class="mini-wishlist" type="button" data-customer-wishlist data-product-id="${product.id}" aria-label="Add ${product.name} to wishlist">♡</button></div>
         </div>
 
         <h3>${product.name}</h3>
@@ -207,6 +240,13 @@ function renderProductDetail() {
   const selectedMarketplace = getQueryParam('marketplace');
   const selectedOffer = product.comparison.find((entry) => entry.marketplaceSlug === selectedMarketplace) || bestOffer;
   const relatedProducts = products.filter((item) => item.id !== product.id).slice(0, 3);
+  const requestedAction = getQueryParam('authAction');
+  const productBaseActionUrl = `/product.html?id=${encodeURIComponent(product.id)}`;
+  const productActionUrl = `/product.html?id=${encodeURIComponent(product.id)}${selectedOffer.marketplaceSlug ? `&marketplace=${encodeURIComponent(selectedOffer.marketplaceSlug)}` : ''}`;
+  const hasProductVideo = product.videoStatus === 'ready' && isValidMediaUrl(product.productVideoUrl);
+  const photoPreviewMarkup = supportsPhotoPreview(product)
+    ? `<div class="ai-preview-tool"><button type="button" class="btn btn-secondary" data-preview-trigger>Try With My Photo</button><div class="ai-preview-panel" data-preview-panel hidden><label class="btn btn-secondary" for="preview-photo-${product.id}">Upload Your Photo</label><input id="preview-photo-${product.id}" data-preview-file type="file" accept="image/jpeg,image/png,image/webp" hidden /><img data-preview-source alt="Your selected preview photo" hidden /><div class="ai-preview-status" data-preview-status>Select a photo to begin.</div><div class="ai-preview-actions"><button type="button" class="btn btn-primary" data-preview-generate disabled>Generate Preview</button><button type="button" class="btn btn-secondary" data-preview-reset>Try Another Photo</button></div><div data-preview-result hidden><span class="section-kicker">AI Preview</span><img data-preview-result-image alt="AI product preview" /></div></div></div>`
+    : '<p class="ai-preview-unavailable">AI preview is not available for this product category yet.</p>';
 
   const metaTag = document.querySelector('meta[name="description"]');
   if (metaTag) {
@@ -228,12 +268,13 @@ function renderProductDetail() {
         <div class="gallery-image-wrap">
           <img src="${product.image}" alt="${product.name}" onerror="this.onerror=null;this.src='https://images.unsplash.com/photo-1524758631624-e2822e304c36?auto=format&fit=crop&w=900&q=80';" />
         </div>
+        ${hasProductVideo ? `<div class="ai-video-card"><button type="button" class="btn btn-secondary" data-video-trigger>▶ Watch Product Video</button><video data-product-video controls preload="none" playsinline hidden><source src="${product.productVideoUrl}" type="video/mp4" /></video></div>` : ''}
       </div>
 
       <div class="detail-card">
         <div class="detail-top-row">
           <span class="product-tag">${product.category}</span>
-          <button class="mini-wishlist" type="button" aria-label="Add ${product.name} to wishlist">♡</button>
+          <button class="mini-wishlist" type="button" data-customer-wishlist data-product-id="${product.id}" aria-label="Add ${product.name} to wishlist">♡</button>
         </div>
 
         <h1>${product.name}</h1>
@@ -259,9 +300,10 @@ function renderProductDetail() {
 
         <div class="product-actions">
           <a href="${selectedOffer.url}" class="btn btn-secondary" target="_blank" rel="noopener noreferrer">View Deal</a>
-          <a href="${selectedOffer.buyUrl}" class="btn btn-primary" target="_blank" rel="noopener noreferrer">Buy Now</a>
+          ${selectedOffer.affiliateConfigured ? `<a href="${selectedOffer.buyUrl}" class="btn btn-primary" data-customer-action="buy" data-product-action-url="${productActionUrl}&authAction=buy" target="_blank" rel="noopener noreferrer">Buy Now</a>` : '<span class="btn btn-primary is-disabled" aria-disabled="true">Buy Now unavailable</span>'}
           <a href="deals.html" class="btn btn-secondary">See More Deals</a>
         </div>
+        <div class="ai-preview-inline">${photoPreviewMarkup}</div>
       </div>
     </div>
 
@@ -300,8 +342,8 @@ function renderProductDetail() {
               <div class="offer-price-box">
                 <span>${formatPrice(entry.price)}</span>
                 <div class="offer-actions">
-                  <a href="${entry.url}" class="btn btn-secondary btn-small" target="_blank" rel="noopener noreferrer">View Deal</a>
-                  <a href="product.html?id=${encodeURIComponent(product.id)}&marketplace=${encodeURIComponent(entry.marketplaceSlug)}" class="btn btn-primary btn-small">Buy Now</a>
+                    <a href="${entry.url}" class="btn btn-secondary btn-small" target="_blank" rel="noopener noreferrer">View Deal</a>
+                  ${entry.affiliateConfigured ? `<a href="${entry.buyUrl}" class="btn btn-primary btn-small" data-customer-action="buy" data-product-action-url="${productBaseActionUrl}&marketplace=${encodeURIComponent(entry.marketplaceSlug)}&authAction=buy" target="_blank" rel="noopener noreferrer">Buy Now</a>` : '<span class="btn btn-primary btn-small is-disabled" aria-disabled="true">Buy Now unavailable</span>'}
                 </div>
               </div>
             </div>
@@ -341,6 +383,77 @@ function renderProductDetail() {
       </div>
     </div>
   `;
+
+  const videoTrigger = root.querySelector('[data-video-trigger]');
+  const video = root.querySelector('[data-product-video]');
+  if (videoTrigger && video) {
+    const openVideo = () => {
+      video.hidden = false;
+      videoTrigger.hidden = true;
+      video.muted = true;
+      video.play().catch(() => {});
+    };
+    videoTrigger.addEventListener('click', async () => {
+      const actionUrl = `${productActionUrl}&authAction=watch-video`;
+      if (await requireCustomerSession(actionUrl)) openVideo();
+    });
+    if (requestedAction === 'watch-video') {
+      window.history.replaceState({}, '', productActionUrl);
+      window.AIFRET_AUTH.session().then(openVideo).catch(() => {});
+    }
+  }
+
+  root.querySelectorAll('[data-customer-action="buy"]').forEach((button) => {
+    button.addEventListener('click', async (event) => {
+      event.preventDefault();
+      const actionUrl = button.dataset.productActionUrl;
+      if (await requireCustomerSession(actionUrl)) window.location.href = button.href;
+    });
+  });
+  if (requestedAction === 'buy') {
+    window.history.replaceState({}, '', productActionUrl);
+    window.AIFRET_AUTH.session().then(() => { if (selectedOffer.affiliateConfigured) window.location.href = selectedOffer.buyUrl; }).catch(() => {});
+  }
+
+  const previewTrigger = root.querySelector('[data-preview-trigger]');
+  const previewPanel = root.querySelector('[data-preview-panel]');
+  const previewFile = root.querySelector('[data-preview-file]');
+  const previewSource = root.querySelector('[data-preview-source]');
+  const previewStatus = root.querySelector('[data-preview-status]');
+  const previewGenerate = root.querySelector('[data-preview-generate]');
+  const previewReset = root.querySelector('[data-preview-reset]');
+  const previewResult = root.querySelector('[data-preview-result]');
+  const previewResultImage = root.querySelector('[data-preview-result-image]');
+  let customerPhoto = '';
+  if (previewTrigger && previewPanel) previewTrigger.addEventListener('click', () => { previewPanel.hidden = false; previewTrigger.hidden = true; });
+  if (previewFile) previewFile.addEventListener('change', () => {
+    const file = previewFile.files[0];
+    if (!file) return;
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 10 * 1024 * 1024) {
+      previewStatus.textContent = 'Choose a JPG, PNG, or WEBP photo up to 10 MB.';
+      previewFile.value = '';
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => { customerPhoto = reader.result; previewSource.src = customerPhoto; previewSource.hidden = false; previewGenerate.disabled = false; previewStatus.textContent = 'Photo ready. Generate your preview when ready.'; };
+    reader.readAsDataURL(file);
+  });
+  if (previewGenerate) previewGenerate.addEventListener('click', async () => {
+    previewGenerate.disabled = true;
+    previewStatus.textContent = 'Generating AI Preview...';
+    try {
+      const result = await window.AIFRET_AI.generatePreview({ product, productImage: product.image, customerPhoto });
+      if (result.status !== 'ready' || !isValidMediaUrl(result.mediaUrl)) throw new Error('Preview unavailable');
+      previewResultImage.src = result.mediaUrl;
+      previewResult.hidden = false;
+      previewStatus.textContent = 'AI Preview Ready';
+    } catch (error) {
+      previewStatus.textContent = 'We couldn\'t generate the preview right now. Please try again.';
+    } finally {
+      previewGenerate.disabled = false;
+    }
+  });
+  if (previewReset) previewReset.addEventListener('click', () => { customerPhoto = ''; previewFile.value = ''; previewSource.removeAttribute('src'); previewSource.hidden = true; previewResult.hidden = true; previewGenerate.disabled = true; previewStatus.textContent = 'Select a photo to begin.'; });
 
   const compareRoot = document.querySelector('[data-compare-grid]');
   if (compareRoot) {

@@ -38,6 +38,7 @@
               <label class="admin-full">Description<textarea name="description" rows="4" required placeholder="Describe the demo product."></textarea></label>
             </div>
             <img class="admin-image-preview" data-admin-image-preview alt="Selected product preview" hidden />
+            <div class="admin-video-panel"><strong>AI Product Video</strong><span data-admin-video-status data-status="pending">AI Product Video not generated</span><a data-admin-video-preview href="#" target="_blank" rel="noopener noreferrer" hidden>Preview video</a><button type="button" class="btn btn-secondary btn-small" data-regenerate-video hidden>Regenerate Video</button></div>
 
             <div class="admin-offer-heading admin-offer-section-heading"><div><span class="section-kicker">Marketplace offers</span><h3>Offer details</h3></div><button type="button" class="btn btn-secondary btn-small" data-add-offer>Add marketplace offer</button></div>
             <div data-admin-offers></div>
@@ -53,6 +54,7 @@
     </main>
 
     <script src="assets/js/config.js"></script>
-    <script src="assets/js/admin.js"></script>
+    <script src="assets/js/ai-provider.js?v=ai-features-1"></script>
+    <script src="assets/js/admin.js?v=ai-features-1"></script>
   </body>
 </html>

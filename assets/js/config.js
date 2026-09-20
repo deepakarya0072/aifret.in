@@ -1,6 +1,13 @@
 window.AIFRET_CONFIG = {
   siteName: 'AIFRET',
   domain: 'aifret.in',
+  ai: {
+    video: { endpoint: '' },
+    preview: { endpoint: '' }
+  },
+  auth: {
+    endpoint: ''
+  },
   affiliateLinks: {
     amazon: '#demo-amazon',
     flipkart: '#demo-flipkart',
