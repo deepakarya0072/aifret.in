@@ -870,6 +870,8 @@ body {
 .offer-price-box { display: grid; gap: 4px; text-align: right; }
 .offer-price-box span { font-weight: 800; }
 .offer-price-box a { color: var(--primary); font-size: 0.82rem; font-weight: 700; }
+.offer-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.offer-actions a { color: inherit; font-size: 0.84rem; }
 .related-wrap { margin-top: 40px; }
 .related-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
 .related-card { display: flex; gap: 14px; padding: 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow-soft); }

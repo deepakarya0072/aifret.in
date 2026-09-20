@@ -49,12 +49,14 @@ function normalizeProduct(product) {
         const entrySlug = (entry.marketplaceSlug || '').toLowerCase();
         return market.slug === entrySlug || marketName === entryName || marketName === (entry.marketplace || '').toLowerCase();
       });
+      const marketplaceSlug = entry.marketplaceSlug || (marketplaceFound ? marketplaceFound.slug : (entry.marketplace || 'amazon').toLowerCase().replace(/\s+/g, '-'));
 
       return {
         ...entry,
-        marketplaceSlug: entry.marketplaceSlug || (marketplaceFound ? marketplaceFound.slug : (entry.marketplace || 'amazon').toLowerCase().replace(/\s+/g, '-')),
+        marketplaceSlug,
         marketplace: entry.storeName || entry.marketplace || (marketplaceFound ? marketplaceFound.name : 'Amazon'),
-        url: config.affiliateLinks?.[(entry.marketplaceSlug || entry.marketplace || 'amazon').toLowerCase().replace(/\s+/g, '-')] || entry.url || '#',
+        url: config.affiliateLinks?.[marketplaceSlug] || entry.url || '#',
+        buyUrl: entry.affiliateUrl || entry.productUrl || entry.url || config.affiliateLinks?.[marketplaceSlug] || '#',
         availability: entry.availability || 'Demo listing'
       };
     })
@@ -68,7 +70,8 @@ function getBestOffer(product) {
     marketplace: 'Amazon',
     price: product.price,
     discount: product.discount,
-    url: config.affiliateLinks?.amazon || '#'
+    url: config.affiliateLinks?.amazon || '#',
+    buyUrl: config.affiliateLinks?.amazon || '#'
   };
 }
 
@@ -129,7 +132,7 @@ function renderProductCard(product, mode = 'featured') {
           <span>⭐ ${product.rating}</span>
         </div>
 
-        <div class="deal-market">${bestOffer.marketplace}</div>
+        <div class="deal-market">Product By <a href="deals.html?marketplace=${encodeURIComponent(bestOffer.marketplaceSlug)}">${bestOffer.marketplace}</a></div>
 
         <div class="price-row">
           <strong>${formatPrice(bestOffer.price)}</strong>
@@ -201,6 +204,8 @@ function renderProductDetail() {
   const productId = getQueryParam('id') || products[0].id;
   const product = normalizeProduct(products.find((item) => item.id === productId) || products[0]);
   const bestOffer = getBestOffer(product);
+  const selectedMarketplace = getQueryParam('marketplace');
+  const selectedOffer = product.comparison.find((entry) => entry.marketplaceSlug === selectedMarketplace) || bestOffer;
   const relatedProducts = products.filter((item) => item.id !== product.id).slice(0, 3);
 
   const metaTag = document.querySelector('meta[name="description"]');
@@ -238,10 +243,12 @@ function renderProductDetail() {
           <span>${product.reviews} reviews</span>
         </div>
 
+        <div class="deal-market">Product By ${selectedOffer.marketplace}</div>
+
         <div class="price-raised">
-          <strong>${formatPrice(bestOffer.price)}</strong>
-          <span class="old-price">${formatPrice(product.originalPrice)}</span>
-          <span class="discount-pill-large">Save ${product.discount}%</span>
+          <strong>${formatPrice(selectedOffer.price)}</strong>
+          <span class="old-price">${formatPrice(selectedOffer.originalPrice || product.originalPrice)}</span>
+          <span class="discount-pill-large">Save ${selectedOffer.discount}%</span>
         </div>
 
         <p class="product-summary">${product.description}</p>
@@ -251,7 +258,8 @@ function renderProductDetail() {
         </ul>
 
         <div class="product-actions">
-          <a href="${bestOffer.url}" class="btn btn-primary" target="_blank" rel="noopener noreferrer">View Deal</a>
+          <a href="${selectedOffer.url}" class="btn btn-secondary" target="_blank" rel="noopener noreferrer">View Deal</a>
+          <a href="${selectedOffer.buyUrl}" class="btn btn-primary" target="_blank" rel="noopener noreferrer">Buy Now</a>
           <a href="deals.html" class="btn btn-secondary">See More Deals</a>
         </div>
       </div>
@@ -291,7 +299,10 @@ function renderProductDetail() {
               </div>
               <div class="offer-price-box">
                 <span>${formatPrice(entry.price)}</span>
-                <a href="${entry.url}" target="_blank" rel="noopener noreferrer">View Deal</a>
+                <div class="offer-actions">
+                  <a href="${entry.url}" class="btn btn-secondary btn-small" target="_blank" rel="noopener noreferrer">View Deal</a>
+                  <a href="product.html?id=${encodeURIComponent(product.id)}&marketplace=${encodeURIComponent(entry.marketplaceSlug)}" class="btn btn-primary btn-small">Buy Now</a>
+                </div>
               </div>
             </div>
           `).join('')}
