@@ -1186,16 +1186,22 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
         identifier = str(body.get('identifier', '')).strip()
         password = str(body.get('password', '')).strip()
         if not identifier or not password:
-            self.send_error_json("Email/mobile and password are required")
+            self.send_error_json("Customer ID, email, or mobile number and password are required")
             return
 
         conn = get_db()
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM customer_users WHERE LOWER(email) = LOWER(?) OR mobile = ? LIMIT 1", (identifier, identifier))
+        cursor.execute("""
+            SELECT * FROM customer_users
+            WHERE LOWER(customer_id) = LOWER(?)
+               OR LOWER(email) = LOWER(?)
+               OR mobile = ?
+            LIMIT 1
+        """, (identifier, identifier, identifier))
         user = cursor.fetchone()
         if not user or not verify_password(password, user['password_hash'], user['salt']):
             conn.close()
-            self.send_error_json("Invalid email/mobile or password", status=401)
+            self.send_error_json("Invalid customer ID, email, mobile number, or password", status=401)
             return
 
         token = secrets.token_hex(32)
