@@ -57,6 +57,22 @@ def verify_password(password: str, hashed: str, salt: str) -> bool:
     check_hash, _ = hash_password(password, salt)
     return secrets.compare_digest(hashed, check_hash)
 
+def generate_customer_id(cursor):
+    cursor.execute("""
+        SELECT customer_id FROM customer_users
+        WHERE customer_id LIKE 'AIFRET-CUS-%'
+        ORDER BY CAST(SUBSTR(customer_id, 15) AS INTEGER) DESC
+        LIMIT 1
+    """)
+    row = cursor.fetchone()
+    last_number = 0
+    if row and row['customer_id']:
+        try:
+            last_number = int(str(row['customer_id']).rsplit('-', 1)[-1])
+        except (TypeError, ValueError):
+            last_number = 0
+    return f"AIFRET-CUS-{last_number + 1:06d}"
+
 def init_database():
     conn = get_db()
     cursor = conn.cursor()
@@ -130,6 +146,74 @@ def init_database():
     );
     """)
 
+    # Customer Users Table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS customer_users (
+        id TEXT PRIMARY KEY,
+        customer_id TEXT UNIQUE NOT NULL,
+        full_name TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        mobile TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        salt TEXT NOT NULL,
+        status TEXT DEFAULT 'active',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    """)
+
+    # Customer Sessions Table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS customer_sessions (
+        token TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES customer_users(id) ON DELETE CASCADE
+    );
+    """)
+
+    # Customer Wishlist Table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS customer_wishlist (
+        id TEXT PRIMARY KEY,
+        customer_id TEXT NOT NULL,
+        product_id TEXT NOT NULL,
+        product_name TEXT DEFAULT '',
+        product_image TEXT DEFAULT '',
+        added_at TEXT NOT NULL,
+        UNIQUE(customer_id, product_id),
+        FOREIGN KEY (customer_id) REFERENCES customer_users(customer_id) ON DELETE CASCADE
+    );
+    """)
+
+    # Customer Recently Viewed Table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS customer_recently_viewed (
+        id TEXT PRIMARY KEY,
+        customer_id TEXT NOT NULL,
+        product_id TEXT NOT NULL,
+        product_name TEXT DEFAULT '',
+        product_image TEXT DEFAULT '',
+        viewed_at TEXT NOT NULL,
+        FOREIGN KEY (customer_id) REFERENCES customer_users(customer_id) ON DELETE CASCADE
+    );
+    """)
+
+    # Customer AI Preview History Table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS customer_ai_previews (
+        id TEXT PRIMARY KEY,
+        customer_id TEXT NOT NULL,
+        preview_id TEXT NOT NULL,
+        title TEXT DEFAULT '',
+        prompt TEXT DEFAULT '',
+        result TEXT DEFAULT '',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (customer_id) REFERENCES customer_users(customer_id) ON DELETE CASCADE
+    );
+    """)
+
     # Indexes for performance
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_products_status ON products(status);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);")
@@ -139,6 +223,12 @@ def init_database():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_products_best_value ON products(best_value);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_offers_product_id ON product_offers(product_id);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_offers_marketplace ON product_offers(marketplace);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_users_email ON customer_users(email);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_users_mobile ON customer_users(mobile);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_sessions_user ON customer_sessions(user_id);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_wishlist_customer ON customer_wishlist(customer_id);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_recently_viewed_customer ON customer_recently_viewed(customer_id);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_ai_previews_customer ON customer_ai_previews(customer_id);")
 
     # Default Admin Creation
     cursor.execute("SELECT COUNT(*) FROM admin_users;")
@@ -481,7 +571,7 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
             return None
 
     # Helper: Extract Session Token from Cookie or Authorization header
-    def get_session_token(self):
+    def get_session_token(self, cookie_name='aifret_session'):
         auth_header = self.headers.get('Authorization', '')
         if auth_header.startswith('Bearer '):
             return auth_header[7:].strip()
@@ -489,13 +579,13 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
         if cookie_header:
             cookies = [c.strip() for c in cookie_header.split(';')]
             for c in cookies:
-                if c.startswith('aifret_session='):
+                if c.startswith(f'{cookie_name}='):
                     return c.split('=', 1)[1].strip()
         return None
 
     # Helper: Authenticate Admin Session
     def authenticate_admin(self):
-        token = self.get_session_token()
+        token = self.get_session_token('aifret_session')
         if not token:
             return None
         conn = get_db()
@@ -511,6 +601,33 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
         conn.close()
         if row:
             return {"user_id": row[1], "username": row[2]}
+        return None
+
+    # Helper: Authenticate Customer Session
+    def authenticate_customer(self):
+        token = self.get_session_token('aifret_customer_session')
+        if not token:
+            return None
+        conn = get_db()
+        cursor = conn.cursor()
+        now = datetime.now().isoformat()
+        cursor.execute("""
+            SELECT s.token, u.id, u.customer_id, u.full_name, u.email, u.mobile, u.status
+            FROM customer_sessions s
+            JOIN customer_users u ON s.user_id = u.id
+            WHERE s.token = ? AND s.expires_at > ?
+        """, (token, now))
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return {
+                "id": row[1],
+                "customerId": row[2],
+                "fullName": row[3],
+                "email": row[4],
+                "mobile": row[5],
+                "status": row[6]
+            }
         return None
 
     # Helper: CORS Preflight
@@ -559,7 +676,64 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
                 self.send_json({"authenticated": False}, status=401)
             return
 
-        # 6. Fall back to static file serving
+        # 6. Customer Session Check: /session
+        if path in ['/session', '/api/customer/session']:
+            customer = self.authenticate_customer()
+            if customer:
+                self.send_json({"authenticated": True, "user": customer})
+            else:
+                self.send_json({"authenticated": False}, status=401)
+            return
+
+        # 7. Customer profile and account routes
+        if path in ['/account/profile', '/api/customer/account/profile']:
+            customer = self.authenticate_customer()
+            if not customer:
+                self.send_error_json("Please login to your AIFRET account to continue.", status=401)
+                return
+            self.send_json({"user": customer})
+            return
+
+        if path in ['/account/wishlist', '/api/customer/account/wishlist']:
+            customer = self.authenticate_customer()
+            if not customer:
+                self.send_error_json("Please login to your AIFRET account to continue.", status=401)
+                return
+            conn = get_db()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM customer_wishlist WHERE customer_id = ? ORDER BY added_at DESC", (customer['customerId'],))
+            rows = [dict(r) for r in cursor.fetchall()]
+            conn.close()
+            self.send_json({"items": rows})
+            return
+
+        if path in ['/account/recently-viewed', '/api/customer/account/recently-viewed']:
+            customer = self.authenticate_customer()
+            if not customer:
+                self.send_error_json("Please login to your AIFRET account to continue.", status=401)
+                return
+            conn = get_db()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM customer_recently_viewed WHERE customer_id = ? ORDER BY viewed_at DESC LIMIT 12", (customer['customerId'],))
+            rows = [dict(r) for r in cursor.fetchall()]
+            conn.close()
+            self.send_json({"items": rows})
+            return
+
+        if path in ['/account/ai-previews', '/api/customer/account/ai-previews']:
+            customer = self.authenticate_customer()
+            if not customer:
+                self.send_error_json("Please login to your AIFRET account to continue.", status=401)
+                return
+            conn = get_db()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM customer_ai_previews WHERE customer_id = ? ORDER BY created_at DESC", (customer['customerId'],))
+            rows = [dict(r) for r in cursor.fetchall()]
+            conn.close()
+            self.send_json({"items": rows})
+            return
+
+        # 8. Fall back to static file serving
         return super().do_GET()
 
     def handle_get_products(self, query):
@@ -777,12 +951,42 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
             self.handle_admin_logout()
             return
 
-        # 3. Image Upload
+        # 3. Customer Signup
+        if path in ['/signup', '/api/customer/signup']:
+            self.handle_customer_signup()
+            return
+
+        # 4. Customer Login
+        if path in ['/login', '/api/customer/login']:
+            self.handle_customer_login()
+            return
+
+        # 5. Customer Logout
+        if path in ['/logout', '/api/customer/logout']:
+            self.handle_customer_logout()
+            return
+
+        # 6. Customer Forgot Password (safe enumeration response)
+        if path in ['/forgot-password', '/api/customer/forgot-password']:
+            self.handle_customer_forgot_password()
+            return
+
+        # 7. Customer Wishlist save endpoint
+        if path in ['/account/wishlist', '/api/customer/account/wishlist']:
+            self.handle_customer_wishlist_post()
+            return
+
+        # 8. Customer recently viewed endpoint
+        if path in ['/account/recently-viewed', '/api/customer/account/recently-viewed']:
+            self.handle_customer_recently_viewed_post()
+            return
+
+        # 9. Image Upload
         if path == '/api/upload':
             self.handle_image_upload()
             return
 
-        # 4. Add Product
+        # 10. Add Product
         if path == '/api/products':
             self.handle_add_product()
             return
@@ -830,7 +1034,7 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
         )
 
     def handle_admin_logout(self):
-        token = self.get_session_token()
+        token = self.get_session_token('aifret_session')
         if token:
             conn = get_db()
             cursor = conn.cursor()
@@ -840,6 +1044,204 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
 
         expired_cookie = "aifret_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
         self.send_json({"success": True}, headers={"Set-Cookie": expired_cookie})
+
+    def handle_customer_signup(self):
+        body = self.get_json_body()
+        if not body:
+            self.send_error_json("Invalid request body")
+            return
+
+        full_name = str(body.get('fullName', '') or body.get('full_name', '')).strip()
+        email = str(body.get('email', '')).strip().lower()
+        mobile = str(body.get('mobile', '')).strip()
+        password = str(body.get('password', '')).strip()
+
+        if not full_name or not email or not mobile or not password:
+            self.send_error_json("Full name, email, mobile, and password are required")
+            return
+        if len(password) < 8:
+            self.send_error_json("Password must be at least 8 characters long")
+            return
+
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM customer_users WHERE LOWER(email) = LOWER(?) OR mobile = ?", (email, mobile))
+        if cursor.fetchone():
+            conn.close()
+            self.send_error_json("An account with this email or mobile already exists", status=409)
+            return
+
+        user_id = f"customer-{secrets.token_hex(8)}"
+        customer_id = generate_customer_id(cursor)
+        pwd_hash, salt = hash_password(password)
+        created_at = datetime.now().isoformat()
+        cursor.execute("""
+            INSERT INTO customer_users (id, customer_id, full_name, email, mobile, password_hash, salt, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, customer_id, full_name, email, mobile, pwd_hash, salt, 'active', created_at, created_at))
+        conn.commit()
+
+        token = secrets.token_hex(32)
+        expires_at = (datetime.now() + timedelta(days=30)).isoformat()
+        cursor.execute("INSERT INTO customer_sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)", (token, user_id, created_at, expires_at))
+        conn.commit()
+        conn.close()
+
+        customer = {"id": user_id, "customerId": customer_id, "fullName": full_name, "email": email, "mobile": mobile, "status": "active"}
+        cookie_val = "aifret_customer_session={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000".format(token)
+        self.send_json({"success": True, "token": token, "user": customer}, headers={"Set-Cookie": cookie_val})
+
+    def handle_customer_login(self):
+        body = self.get_json_body()
+        if not body:
+            self.send_error_json("Invalid request body")
+            return
+
+        identifier = str(body.get('identifier', '')).strip()
+        password = str(body.get('password', '')).strip()
+        if not identifier or not password:
+            self.send_error_json("Email/mobile and password are required")
+            return
+
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM customer_users WHERE LOWER(email) = LOWER(?) OR mobile = ? LIMIT 1", (identifier, identifier))
+        user = cursor.fetchone()
+        if not user or not verify_password(password, user['password_hash'], user['salt']):
+            conn.close()
+            self.send_error_json("Invalid email/mobile or password", status=401)
+            return
+
+        token = secrets.token_hex(32)
+        created_at = datetime.now().isoformat()
+        expires_at = (datetime.now() + timedelta(days=30)).isoformat()
+        cursor.execute("INSERT INTO customer_sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)", (token, user['id'], created_at, expires_at))
+        conn.commit()
+        conn.close()
+
+        customer = {"id": user['id'], "customerId": user['customer_id'], "fullName": user['full_name'], "email": user['email'], "mobile": user['mobile'], "status": user['status']}
+        cookie_val = "aifret_customer_session={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000".format(token)
+        self.send_json({"success": True, "token": token, "user": customer}, headers={"Set-Cookie": cookie_val})
+
+    def handle_customer_logout(self):
+        token = self.get_session_token('aifret_customer_session')
+        if token:
+            conn = get_db()
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM customer_sessions WHERE token = ?", (token,))
+            conn.commit()
+            conn.close()
+        expired_cookie = "aifret_customer_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
+        self.send_json({"success": True}, headers={"Set-Cookie": expired_cookie})
+
+    def handle_customer_forgot_password(self):
+        self.send_json({"success": True, "message": "If the account exists, password reset instructions have been sent."})
+
+    def handle_customer_profile_update(self):
+        customer = self.authenticate_customer()
+        if not customer:
+            self.send_error_json("Please login to your AIFRET account to continue.", status=401)
+            return
+
+        body = self.get_json_body() or {}
+        full_name = str(body.get('fullName', customer['fullName']) or customer['fullName']).strip()
+        email = str(body.get('email', customer['email']) or customer['email']).strip().lower()
+        mobile = str(body.get('mobile', customer['mobile']) or customer['mobile']).strip()
+
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM customer_users WHERE (LOWER(email) = LOWER(?) OR mobile = ?) AND id != ?", (email, mobile, customer['id']))
+        if cursor.fetchone():
+            conn.close()
+            self.send_error_json("This email or mobile number is already in use.", status=409)
+            return
+
+        cursor.execute("UPDATE customer_users SET full_name = ?, email = ?, mobile = ?, updated_at = ? WHERE id = ?", (full_name, email, mobile, datetime.now().isoformat(), customer['id']))
+        conn.commit()
+        conn.close()
+        self.send_json({"success": True, "user": {"id": customer['id'], "customerId": customer['customerId'], "fullName": full_name, "email": email, "mobile": mobile, "status": customer['status']}})
+
+    def handle_customer_wishlist_post(self):
+        customer = self.authenticate_customer()
+        if not customer:
+            self.send_error_json("Please login to your AIFRET account to continue.", status=401)
+            return
+
+        body = self.get_json_body() or {}
+        product_id = str(body.get('productId', '') or body.get('product_id', '')).strip()
+        product_name = str(body.get('productName', '')).strip()
+        product_image = str(body.get('productImage', '')).strip()
+        if not product_id:
+            self.send_error_json("Product ID is required")
+            return
+
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM customer_wishlist WHERE customer_id = ? AND product_id = ?", (customer['customerId'], product_id))
+        if cursor.fetchone():
+            conn.close()
+            self.send_json({"success": True, "saved": True})
+            return
+
+        row_id = f"wishlist-{secrets.token_hex(8)}"
+        cursor.execute("INSERT INTO customer_wishlist (id, customer_id, product_id, product_name, product_image, added_at) VALUES (?, ?, ?, ?, ?, ?)", (row_id, customer['customerId'], product_id, product_name, product_image, datetime.now().isoformat()))
+        conn.commit()
+        conn.close()
+        self.send_json({"success": True, "saved": True})
+
+    def handle_customer_wishlist_delete(self):
+        customer = self.authenticate_customer()
+        if not customer:
+            self.send_error_json("Please login to your AIFRET account to continue.", status=401)
+            return
+
+        body = self.get_json_body() or {}
+        product_id = str(body.get('productId', '') or body.get('product_id', '')).strip()
+        if not product_id:
+            self.send_error_json("Product ID is required")
+            return
+
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM customer_wishlist WHERE customer_id = ? AND product_id = ?", (customer['customerId'], product_id))
+        conn.commit()
+        conn.close()
+        self.send_json({"success": True, "saved": False})
+
+    def handle_customer_recently_viewed_post(self):
+        customer = self.authenticate_customer()
+        if not customer:
+            self.send_error_json("Please login to your AIFRET account to continue.", status=401)
+            return
+
+        body = self.get_json_body() or {}
+        product_id = str(body.get('productId', '') or body.get('product_id', '')).strip()
+        if not product_id:
+            self.send_error_json("Product ID is required")
+            return
+
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM customer_recently_viewed WHERE customer_id = ? AND product_id = ? ORDER BY viewed_at DESC LIMIT 1", (customer['customerId'], product_id))
+        if not cursor.fetchone():
+            row_id = f"recent-{secrets.token_hex(8)}"
+            cursor.execute("INSERT INTO customer_recently_viewed (id, customer_id, product_id, product_name, product_image, viewed_at) VALUES (?, ?, ?, ?, ?, ?)", (row_id, customer['customerId'], product_id, str(body.get('productName', '')).strip(), str(body.get('productImage', '')).strip(), datetime.now().isoformat()))
+            conn.commit()
+        conn.close()
+        self.send_json({"success": True})
+
+    def handle_customer_ai_preview_delete(self, preview_id):
+        customer = self.authenticate_customer()
+        if not customer:
+            self.send_error_json("Please login to your AIFRET account to continue.", status=401)
+            return
+
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM customer_ai_previews WHERE customer_id = ? AND preview_id = ?", (customer['customerId'], preview_id))
+        conn.commit()
+        conn.close()
+        self.send_json({"success": True})
 
     def handle_image_upload(self):
         admin = self.authenticate_admin()
@@ -1062,6 +1464,10 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
 
+        if path in ['/account/profile', '/api/customer/account/profile']:
+            self.handle_customer_profile_update()
+            return
+
         # Update Product: PUT /api/products/<id>
         if path.startswith('/api/products/'):
             product_id = path[len('/api/products/'):].strip()
@@ -1249,6 +1655,15 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
         query = urllib.parse.parse_qs(parsed_url.query)
+
+        if path in ['/account/wishlist', '/api/customer/account/wishlist']:
+            self.handle_customer_wishlist_delete()
+            return
+
+        if path.startswith('/account/ai-previews/') or path.startswith('/api/customer/account/ai-previews/'):
+            preview_id = path.split('/')[-1].strip()
+            self.handle_customer_ai_preview_delete(preview_id)
+            return
 
         admin = self.authenticate_admin()
         if not admin:

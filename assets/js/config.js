@@ -6,7 +6,7 @@ window.AIFRET_CONFIG = {
     preview: { endpoint: '' }
   },
   auth: {
-    endpoint: ''
+    endpoint: (window.location.origin && window.location.origin !== 'null') ? window.location.origin : 'http://localhost:8000'
   },
   affiliateLinks: {
     amazon: '#demo-amazon',
