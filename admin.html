@@ -4,57 +4,326 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="robots" content="noindex, nofollow" />
-    <title>Product Management | AIFRET</title>
+    <title>Admin Product Management | AIFRET</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="assets/css/styles.css" />
+    <link rel="stylesheet" href="assets/css/styles.css?v=modals-fixed-1" />
   </head>
   <body class="admin-page">
     <header class="site-header">
       <div class="container header-inner">
-        <a href="index.html" class="brand" aria-label="AIFRET home"><span class="brand-mark">A</span><span class="brand-word">AIFRET</span></a>
-        <div class="header-tools"><span class="admin-header-label">Local product management</span><a href="index.html" class="btn btn-secondary btn-small">Back to site</a></div>
+        <a href="index.html" class="brand" aria-label="AIFRET home">
+          <span class="brand-mark">A</span>
+          <span class="brand-word">AIFRET</span>
+        </a>
+        <div class="header-tools">
+          <span class="admin-header-label" data-admin-header-user>Admin Management</span>
+          <button type="button" class="btn btn-secondary btn-small" data-admin-logout-btn hidden>Sign Out</button>
+          <a href="index.html" class="btn btn-secondary btn-small">Back to site</a>
+        </div>
       </div>
     </header>
 
-    <main class="container admin-shell">
+    <!-- Admin Authentication Gate (shown if unauthenticated) -->
+    <div class="container" data-admin-login-view hidden>
+      <div class="admin-auth-panel">
+        <span class="section-kicker">Restricted Access</span>
+        <h2>Admin Sign In</h2>
+        <p>Log in with your administrator credentials to manage the product catalog and marketplace offers.</p>
+        <form data-admin-login-form>
+          <label>Username
+            <input type="text" name="username" required autocomplete="username" placeholder="admin" autofocus />
+          </label>
+          <label>Password
+            <input type="password" name="password" required autocomplete="current-password" placeholder="••••••••" />
+          </label>
+          <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 6px;">Sign In to Dashboard</button>
+          <p class="auth-status" data-admin-login-status role="status"></p>
+        </form>
+      </div>
+    </div>
+
+    <!-- Admin Dashboard (shown once authenticated) -->
+    <main class="container admin-shell" data-admin-dashboard-view hidden>
       <div class="admin-intro">
-        <span class="section-kicker">Private local tool</span>
-        <h1>Product management</h1>
-        <p>Add or edit demo products and their marketplace offers. Changes are saved only in this browser.</p>
+        <span class="section-kicker">Product Management</span>
+        <h1>Catalog & Marketplace Control</h1>
+        <p>Manage products, pricing, discounts, and multiple marketplace offers. Changes immediately update across the entire AIFRET website.</p>
+      </div>
+
+      <!-- Quick Catalog Counters -->
+      <div class="admin-stats-grid">
+        <div class="admin-stat-card">
+          <span class="admin-stat-num" data-stat-total>0</span>
+          <span class="admin-stat-label">Total Products</span>
+        </div>
+        <div class="admin-stat-card">
+          <span class="admin-stat-num" style="color: var(--success);" data-stat-active>0</span>
+          <span class="admin-stat-label">Active</span>
+        </div>
+        <div class="admin-stat-card">
+          <div class="admin-stat-num" style="color: var(--danger);" data-stat-inactive>0</div>
+          <span class="admin-stat-label">Inactive</span>
+        </div>
+        <div class="admin-stat-card">
+          <span class="admin-stat-num" style="color: var(--primary);" data-stat-featured>0</span>
+          <span class="admin-stat-label">Featured</span>
+        </div>
+        <div class="admin-stat-card">
+          <span class="admin-stat-num" style="color: #b45309;" data-stat-best>0</span>
+          <span class="admin-stat-label">Best Value</span>
+        </div>
       </div>
 
       <div class="admin-layout">
-        <section class="admin-panel">
-          <div class="admin-panel-heading"><div><span class="section-kicker">Catalog entry</span><h2 data-admin-form-title>Add product</h2></div><button type="button" class="btn btn-secondary btn-small" data-admin-reset>Clear form</button></div>
+        <!-- Add / Edit Product Panel -->
+        <section class="admin-panel" id="product-form-panel">
+          <div class="admin-panel-heading">
+            <div>
+              <span class="section-kicker">Catalog Editor</span>
+              <h2 data-admin-form-title>Add New Product</h2>
+            </div>
+            <button type="button" class="btn btn-secondary btn-small" data-admin-reset>Clear form</button>
+          </div>
+
           <form data-admin-form novalidate>
             <div class="admin-form-grid">
-              <label>Product name<input name="name" type="text" required placeholder="Example Smartphone" /></label>
-              <label>Category<select name="category" data-admin-category required><option value="">Select category</option></select></label>
-              <label>Brand<input name="brand" type="text" required placeholder="Example brand" /></label>
-              <label>Image URL<input name="imageUrl" type="url" placeholder="https://example.com/product-image.jpg" /></label>
-              <label class="admin-full">Upload product image<input data-admin-image-file type="file" accept="image/*" /></label>
-              <label class="admin-full">Description<textarea name="description" rows="4" required placeholder="Describe the demo product."></textarea></label>
-            </div>
-            <img class="admin-image-preview" data-admin-image-preview alt="Selected product preview" hidden />
-            <div class="admin-video-panel"><strong>AI Product Video</strong><span data-admin-video-status data-status="pending">AI Product Video not generated</span><a data-admin-video-preview href="#" target="_blank" rel="noopener noreferrer" hidden>Preview video</a><button type="button" class="btn btn-secondary btn-small" data-regenerate-video hidden>Regenerate Video</button></div>
+              <!-- Field 1: Product ID -->
+              <label>Product ID (Slug)
+                <input name="id" type="text" placeholder="e.g. noise-buds-x (leave blank to auto-generate)" />
+              </label>
 
-            <div class="admin-offer-heading admin-offer-section-heading"><div><span class="section-kicker">Marketplace offers</span><h3>Offer details</h3></div><button type="button" class="btn btn-secondary btn-small" data-add-offer>Add marketplace offer</button></div>
+              <!-- Field 2: Product Name -->
+              <label>Product Name *
+                <input name="name" type="text" required placeholder="e.g. Noise Buds X" />
+              </label>
+
+              <!-- Field 3: Brand -->
+              <label>Brand *
+                <input name="brand" type="text" required placeholder="e.g. Noise" />
+              </label>
+
+              <!-- Field 4: Category -->
+              <label>Category *
+                <select name="category" data-admin-category required>
+                  <option value="">Select Category</option>
+                  <option value="Earbuds">Earbuds</option>
+                  <option value="Electronics">Electronics</option>
+                  <option value="Mobiles">Mobiles</option>
+                  <option value="Laptops">Laptops</option>
+                  <option value="Fashion">Fashion</option>
+                  <option value="Shoes">Shoes</option>
+                  <option value="Beauty">Beauty</option>
+                  <option value="Home & Kitchen">Home & Kitchen</option>
+                  <option value="Watches">Watches</option>
+                </select>
+              </label>
+
+              <!-- Field 5: Subcategory -->
+              <label>Subcategory
+                <input name="subcategory" type="text" placeholder="e.g. Wireless Audio" />
+              </label>
+
+              <!-- Field 12: Primary Marketplace -->
+              <label>Primary Marketplace *
+                <select name="marketplace" data-admin-primary-market required>
+                  <option value="Amazon">Amazon</option>
+                  <option value="Flipkart">Flipkart</option>
+                  <option value="Myntra">Myntra</option>
+                  <option value="Croma">Croma</option>
+                  <option value="Reliance Digital">Reliance Digital</option>
+                  <option value="Meesho">Meesho</option>
+                  <option value="Nykaa">Nykaa</option>
+                  <option value="Other Stores">Other Stores</option>
+                </select>
+              </label>
+
+              <!-- Field 9: MRP -->
+              <label>MRP (₹) *
+                <input name="mrp" type="number" min="0" step="1" required placeholder="e.g. 3999" data-calc-mrp />
+              </label>
+
+              <!-- Field 10: Selling Price -->
+              <label>Selling Price (₹) *
+                <input name="selling_price" type="number" min="0" step="1" required readonly placeholder="Calculated from MRP and discount" data-calc-price style="background: var(--bg-soft); font-weight: 700;" />
+              </label>
+
+              <!-- Field 11: Discount -->
+              <label>Discount Percentage *
+                <input name="discount" type="number" min="0" max="100" step="1" required placeholder="e.g. 25" data-calc-discount />
+              </label>
+
+              <!-- Field 13: Marketplace Product URL -->
+              <label class="admin-full">Marketplace Product URL *
+                <input name="product_url" type="url" required placeholder="https://www.amazon.in/dp/example" />
+              </label>
+
+              <!-- Field 6: Main Product Image -->
+              <label>Image URL
+                <input name="imageUrl" type="url" placeholder="https://example.com/product.jpg" data-admin-image-url />
+              </label>
+              <label>Upload Main Image File
+                <input type="file" accept="image/*" data-admin-image-file />
+              </label>
+
+              <div class="admin-full">
+                <div style="font-size: 0.8rem; font-weight: 700; color: var(--muted); margin-bottom: 4px;">Main Image Preview:</div>
+                <img class="admin-image-preview" data-admin-image-preview alt="Selected product preview" hidden />
+              </div>
+
+              <!-- Field 7: Additional Images -->
+              <label class="admin-full">Additional Image URLs (Comma separated or Upload below)
+                <input name="additionalImagesUrls" type="text" placeholder="https://image1.jpg, https://image2.jpg" data-admin-extra-urls />
+              </label>
+              <label class="admin-full">Upload Additional Images
+                <input type="file" accept="image/*" multiple data-admin-extra-files />
+              </label>
+              <div class="admin-full">
+                <div class="admin-gallery-preview" data-admin-extra-preview></div>
+              </div>
+
+              <!-- Field 8: Description -->
+              <label class="admin-full">Product Description *
+                <textarea name="description" rows="3" required placeholder="Describe product features, highlights and specs."></textarea>
+              </label>
+
+              <!-- Field 14: Rating -->
+              <label>Rating (0.0 to 5.0)
+                <input name="rating" type="number" min="0" max="5" step="0.1" value="4.5" />
+              </label>
+
+              <!-- Field 15: Review Count -->
+              <label>Review Count
+                <input name="review_count" type="number" min="0" step="1" value="1250" />
+              </label>
+
+              <!-- Field 16: Availability -->
+              <label>Availability
+                <input name="availability" type="text" value="In Stock" placeholder="e.g. In Stock / Ships in 2 days" />
+              </label>
+
+              <!-- Field 17: Stock Status -->
+              <label>Stock Status
+                <select name="stock_status">
+                  <option value="in_stock">In Stock</option>
+                  <option value="limited">Limited Stock</option>
+                  <option value="out_of_stock">Out of Stock</option>
+                </select>
+              </label>
+
+              <!-- Field 20: Product Status -->
+              <label>Product Status
+                <select name="status">
+                  <option value="active">Active (Visible on website)</option>
+                  <option value="inactive">Inactive (Hidden / Soft-deleted)</option>
+                </select>
+              </label>
+
+              <!-- Field 18 & 19: Featured & Best Value Toggles -->
+              <div class="admin-full" style="display: flex; gap: 24px; padding: 12px 0;">
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                  <input type="checkbox" name="featured" value="1" />
+                  <span>Mark as Featured Product</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                  <input type="checkbox" name="best_value" value="1" />
+                  <span>Mark as Best Value Product (Hero Spotlight)</span>
+                </label>
+              </div>
+            </div>
+
+            <!-- Field 22: Multiple Marketplace Offers (Sections 10 & 11) -->
+            <div class="admin-offer-heading admin-offer-section-heading">
+              <div>
+                <span class="section-kicker">Multiple Marketplace Prices</span>
+                <h3>Cross-Store Offers Comparison</h3>
+              </div>
+              <button type="button" class="btn btn-secondary btn-small" data-add-offer>+ Add Store Offer</button>
+            </div>
             <div data-admin-offers></div>
-            <div class="admin-form-footer"><button type="submit" class="btn btn-primary" data-admin-submit>Save product</button><p data-admin-status role="status">Demo data only. No live prices or affiliate credentials.</p></div>
+
+            <div class="admin-form-footer">
+              <button type="submit" class="btn btn-primary" data-admin-submit>Save Product</button>
+              <button type="button" class="btn btn-secondary" data-admin-cancel-edit hidden>Cancel Edit</button>
+              <p data-admin-status role="status" style="margin-left: auto; font-weight: 600;"></p>
+            </div>
           </form>
         </section>
 
+        <!-- Catalog List Panel -->
         <aside class="admin-panel admin-catalog-panel">
-          <div class="admin-panel-heading"><div><span class="section-kicker">Stored locally</span><h2>Catalog products</h2></div><span class="admin-storage-badge">localStorage</span></div>
-          <div class="admin-product-list" data-admin-product-list></div>
+          <div class="admin-panel-heading">
+            <div>
+              <span class="section-kicker">Live Catalog</span>
+              <h2>Stored Products</h2>
+            </div>
+            <span class="admin-storage-badge" style="background: rgba(36,87,255,0.1); color: var(--primary);">SQLite DB</span>
+          </div>
+
+          <!-- Search, Filter & Sort Toolbar -->
+          <div class="admin-toolbar-row">
+            <input type="search" class="admin-search-box" placeholder="Search products, brands..." data-admin-search />
+            <select data-admin-filter-status aria-label="Filter by Status">
+              <option value="all">All Status</option>
+              <option value="active">Active Only</option>
+              <option value="inactive">Inactive Only</option>
+            </select>
+            <select data-admin-filter-category aria-label="Filter by Category">
+              <option value="all">All Categories</option>
+            </select>
+            <select data-admin-filter-market aria-label="Filter by Marketplace">
+              <option value="all">All Marketplaces</option>
+            </select>
+            <select data-admin-sort aria-label="Sort products">
+              <option value="newest">Newest First</option>
+              <option value="name">Name (A-Z)</option>
+              <option value="price-asc">Price: Low to High</option>
+              <option value="price-desc">Price: High to Low</option>
+              <option value="discount">Highest Discount</option>
+              <option value="rating">Highest Rating</option>
+            </select>
+          </div>
+
+          <!-- Products Table -->
+          <div class="admin-table-container">
+            <table class="admin-table">
+              <thead>
+                <tr>
+                  <th>Image</th>
+                  <th>Product</th>
+                  <th>Brand</th>
+                  <th>Category</th>
+                  <th>Price</th>
+                  <th>Store</th>
+                  <th>Status</th>
+                  <th>Badges</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody data-admin-table-body>
+                <tr><td colspan="9" style="text-align: center; padding: 24px; color: var(--muted);">Loading products from database...</td></tr>
+              </tbody>
+            </table>
+          </div>
         </aside>
       </div>
     </main>
 
+    <!-- Delete Confirmation Modal Dialog -->
+    <div class="admin-modal-backdrop" data-admin-delete-modal hidden style="display: none;">
+      <div class="admin-modal-card">
+        <h3>Delete or Deactivate Product?</h3>
+        <p data-delete-modal-text>Choose how you would like to handle this product.</p>
+        <div class="admin-modal-actions">
+          <button type="button" class="btn btn-secondary" data-delete-cancel>Cancel</button>
+          <button type="button" class="btn btn-secondary" style="border-color: var(--warning); color: #b45309;" data-delete-soft>Deactivate (Soft Delete)</button>
+          <button type="button" class="btn btn-danger" data-delete-permanent>Delete Permanently</button>
+        </div>
+      </div>
+    </div>
+
     <script src="assets/js/config.js"></script>
-    <script src="assets/js/ai-provider.js?v=ai-features-1"></script>
-    <script src="assets/js/admin.js?v=ai-features-1"></script>
+    <script src="assets/js/admin.js?v=product-system-4"></script>
   </body>
 </html>

@@ -1,314 +1,756 @@
-const adminStorageKey = 'aifret.products.v1';
-const adminConfig = window.AIFRET_CONFIG;
-let adminProducts = loadAdminProducts();
+/**
+ * AIFRET - Admin Product Management System
+ * Connects to REST API endpoints for secure database-backed catalog control.
+ */
+
+let adminProducts = [];
 let editingProductId = null;
-let selectedImageData = '';
-const maxImageBytes = 10 * 1024 * 1024;
+let selectedMainImage = '';
+let additionalImagesList = [];
+let pendingDeleteProductId = null;
+const PRODUCTS_STORAGE_KEY = 'aifret.products.v1';
 
-function loadAdminProducts() {
+const currency = new Intl.NumberFormat('en-IN', {
+  style: 'currency',
+  currency: 'INR',
+  maximumFractionDigits: 0
+});
+
+function formatPrice(val) {
+  return currency.format(Number(val) || 0);
+}
+
+function escapeHtml(str = '') {
+  return String(str).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+// ---------------------------------------------------------------------------
+// Authentication & Session
+// ---------------------------------------------------------------------------
+
+async function checkAdminSession() {
   try {
-    const saved = JSON.parse(localStorage.getItem(adminStorageKey) || 'null');
-    return Array.isArray(saved) ? saved.map(migrateAdminProduct) : adminConfig.products.map(migrateAdminProduct);
-  } catch (error) {
-    return adminConfig.products.map(migrateAdminProduct);
+    const res = await fetch('/api/admin/session');
+    if (res.ok) {
+      const data = await res.json();
+      showDashboard(data.user?.username || 'Admin');
+    } else {
+      showLogin();
+    }
+  } catch (err) {
+    showLogin();
   }
 }
 
-function migrateAdminProduct(product) {
-  return {
-    ...product,
-    comparison: (product.comparison || []).map((offer) => ({
-      ...offer,
-      storeName: offer.storeName || (offer.marketplaceSlug === 'other-stores' ? 'Demo Store' : '')
-    }))
+function showLogin() {
+  document.querySelector('[data-admin-login-view]').hidden = false;
+  document.querySelector('[data-admin-dashboard-view]').hidden = true;
+  document.querySelector('[data-admin-logout-btn]').hidden = true;
+  document.querySelector('[data-admin-header-user]').textContent = 'Admin Management';
+}
+
+function showDashboard(username) {
+  document.querySelector('[data-admin-login-view]').hidden = true;
+  document.querySelector('[data-admin-dashboard-view]').hidden = false;
+  document.querySelector('[data-admin-logout-btn]').hidden = false;
+  document.querySelector('[data-admin-header-user]').textContent = `Logged in as: ${username}`;
+  loadProducts();
+}
+
+async function handleAdminLogin(event) {
+  event.preventDefault();
+  const form = event.target;
+  const statusEl = document.querySelector('[data-admin-login-status]');
+  statusEl.textContent = 'Verifying credentials...';
+  statusEl.style.color = 'var(--muted)';
+
+  const body = {
+    username: form.elements.username.value.trim(),
+    password: form.elements.password.value.trim()
   };
-}
-
-function saveAdminProducts() {
-  localStorage.setItem(adminStorageKey, JSON.stringify(adminProducts));
-}
-
-function setAdminVideoStatus(status, product = null) {
-  const statusRoot = document.querySelector('[data-admin-video-status]');
-  const preview = document.querySelector('[data-admin-video-preview]');
-  const regenerate = document.querySelector('[data-regenerate-video]');
-  const messages = {
-    pending: 'AI Product Video not generated',
-    processing: 'Generating AI Product Video...',
-    ready: 'AI Product Video Ready ✓',
-    failed: 'AI Product Video Generation Failed'
-  };
-  if (statusRoot) {
-    statusRoot.textContent = messages[status] || messages.pending;
-    statusRoot.dataset.status = status || 'pending';
-  }
-  if (preview) {
-    preview.hidden = status !== 'ready' || !product?.productVideoUrl;
-    preview.href = product?.productVideoUrl || '#';
-  }
-  if (regenerate) regenerate.hidden = !product?.id || !product?.image;
-}
-
-async function generateProductVideo(product) {
-  product.videoStatus = 'processing';
-  product.productVideoUrl = '';
-  product.videoJobId = '';
-  saveAdminProducts();
-  setAdminVideoStatus('processing', product);
 
   try {
-    const result = await window.AIFRET_AI.generateVideo({ product, image: product.image });
-    product.videoStatus = result.status === 'pending' || result.status === 'processing' ? result.status : 'ready';
-    product.productVideoUrl = result.mediaUrl || '';
-    product.videoJobId = result.jobId || '';
-    product.videoGeneratedAt = result.generatedAt || new Date().toISOString();
-    if (product.videoStatus === 'ready' && !product.productVideoUrl) throw new Error('Provider returned no video URL.');
-  } catch (error) {
-    product.videoStatus = 'failed';
-    product.productVideoUrl = '';
-    product.videoJobId = '';
+    const res = await fetch('/api/admin/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      statusEl.textContent = '';
+      form.reset();
+      showDashboard(data.username || body.username);
+    } else {
+      statusEl.textContent = data.message || 'Invalid username or password.';
+      statusEl.style.color = 'var(--danger)';
+    }
+  } catch (err) {
+    statusEl.textContent = 'Server connection error. Ensure server.py is running.';
+    statusEl.style.color = 'var(--danger)';
   }
-
-  const index = adminProducts.findIndex((item) => item.id === product.id);
-  if (index >= 0) adminProducts[index] = product;
-  saveAdminProducts();
-  renderAdminList();
-  setAdminVideoStatus(product.videoStatus, product);
 }
 
-function escapeHtml(value = '') {
-  return String(value).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
-}
-
-function marketplaceOptions(selected = '') {
-  return adminConfig.marketplaces.map((marketplace) => `<option value="${marketplace.slug}" ${marketplace.slug === selected ? 'selected' : ''}>${marketplace.name}</option>`).join('');
-}
-
-function categoryOptions(selected = '') {
-  return adminConfig.categories.map((category) => `<option value="${category.slug}" data-name="${escapeHtml(category.name)}" ${category.slug === selected ? 'selected' : ''}>${category.name}</option>`).join('');
-}
-
-function isValidAffiliateUrl(value) {
+async function handleAdminLogout() {
   try {
-    const url = new URL(value);
-    return url.protocol === 'http:' || url.protocol === 'https:';
-  } catch (error) {
-    return false;
+    await fetch('/api/admin/logout', { method: 'POST' });
+  } catch (e) {}
+  showLogin();
+}
+
+// ---------------------------------------------------------------------------
+// Product Data Loading & Filtering
+// ---------------------------------------------------------------------------
+
+async function loadProducts() {
+  const tbody = document.querySelector('[data-admin-table-body]');
+  try {
+    const res = await fetch('/api/products?status=all&limit=500');
+    if (!res.ok) throw new Error('Failed to load products');
+    const data = await res.json();
+    adminProducts = data.products || [];
+    try {
+      window.localStorage.setItem(PRODUCTS_STORAGE_KEY, JSON.stringify(
+        adminProducts.filter((product) => product.status === 'active')
+      ));
+    } catch (error) {}
+    updateStats();
+    populateFilterDropdowns();
+    renderProductTable();
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: var(--danger); padding: 24px;">Failed to load products from database: ${err.message}</td></tr>`;
   }
 }
+
+function updateStats() {
+  const total = adminProducts.length;
+  const active = adminProducts.filter(p => p.status === 'active').length;
+  const inactive = adminProducts.filter(p => p.status === 'inactive').length;
+  const featured = adminProducts.filter(p => p.featured === 1 || p.featured === true).length;
+  const best = adminProducts.filter(p => p.best_value === 1 || p.best_value === true).length;
+
+  document.querySelector('[data-stat-total]').textContent = total;
+  document.querySelector('[data-stat-active]').textContent = active;
+  document.querySelector('[data-stat-inactive]').textContent = inactive;
+  document.querySelector('[data-stat-featured]').textContent = featured;
+  document.querySelector('[data-stat-best]').textContent = best;
+}
+
+function populateFilterDropdowns() {
+  const categorySelect = document.querySelector('[data-admin-filter-category]');
+  const marketSelect = document.querySelector('[data-admin-filter-market]');
+
+  const currentCat = categorySelect.value;
+  const currentMkt = marketSelect.value;
+
+  const categories = Array.from(new Set(adminProducts.map(p => p.category).filter(Boolean))).sort();
+  categorySelect.innerHTML = '<option value="all">All Categories</option>' +
+    categories.map(c => `<option value="${escapeHtml(c)}" ${c === currentCat ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('');
+
+  const markets = Array.from(new Set(adminProducts.map(p => p.marketplace).filter(Boolean))).sort();
+  marketSelect.innerHTML = '<option value="all">All Marketplaces</option>' +
+    markets.map(m => `<option value="${escapeHtml(m)}" ${m === currentMkt ? 'selected' : ''}>${escapeHtml(m)}</option>`).join('');
+}
+
+function getFilteredProducts() {
+  const searchVal = (document.querySelector('[data-admin-search]').value || '').toLowerCase().trim();
+  const statusVal = document.querySelector('[data-admin-filter-status]').value;
+  const catVal = document.querySelector('[data-admin-filter-category]').value;
+  const mktVal = document.querySelector('[data-admin-filter-market]').value;
+  const sortVal = document.querySelector('[data-admin-sort]').value;
+
+  let list = adminProducts.filter(p => {
+    if (statusVal === 'active' && p.status !== 'active') return false;
+    if (statusVal === 'inactive' && p.status !== 'inactive') return false;
+    if (catVal !== 'all' && (p.category || '').toLowerCase() !== catVal.toLowerCase()) return false;
+    if (mktVal !== 'all' && (p.marketplace || '').toLowerCase() !== mktVal.toLowerCase()) return false;
+
+    if (searchVal) {
+      const matchText = `${p.name} ${p.brand} ${p.category} ${p.subcategory || ''} ${p.marketplace}`.toLowerCase();
+      if (!matchText.includes(searchVal)) return false;
+    }
+    return true;
+  });
+
+  list.sort((a, b) => {
+    if (sortVal === 'name') return (a.name || '').localeCompare(b.name || '');
+    if (sortVal === 'price-asc') return (a.selling_price || 0) - (b.selling_price || 0);
+    if (sortVal === 'price-desc') return (b.selling_price || 0) - (a.selling_price || 0);
+    if (sortVal === 'discount') return (b.discount || 0) - (a.discount || 0);
+    if (sortVal === 'rating') return (b.rating || 0) - (a.rating || 0);
+    // newest default
+    return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+  });
+
+  return list;
+}
+
+function renderProductTable() {
+  const tbody = document.querySelector('[data-admin-table-body]');
+  const products = getFilteredProducts();
+
+  if (!products.length) {
+    tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; padding: 32px; color: var(--muted);">No products found matching filters.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = products.map(p => {
+    const isActive = p.status === 'active';
+    const isFeatured = p.featured === 1 || p.featured === true;
+    const isBest = p.best_value === 1 || p.best_value === true;
+    const extraOffersCount = (p.offers || p.comparison || []).length;
+    const fallbackImage = 'https://images.unsplash.com/photo-1524758631624-e2822e304c36?auto=format&fit=crop&w=200&q=80';
+
+    return `
+      <tr data-prod-id="${escapeHtml(p.id)}">
+        <td>
+          <img src="${escapeHtml(p.image)}" alt="${escapeHtml(p.name)}" class="admin-prod-thumb" onerror="this.onerror=null;this.src='${fallbackImage}';" />
+        </td>
+        <td>
+          <strong>${escapeHtml(p.name)}</strong>
+          ${p.subcategory ? `<small style="display:block; color: var(--muted); font-size: 0.76rem;">${escapeHtml(p.subcategory)}</small>` : ''}
+          <small style="color: var(--muted); font-size: 0.74rem;">ID: ${escapeHtml(p.id)}</small>
+        </td>
+        <td>${escapeHtml(p.brand)}</td>
+        <td><span class="product-tag" style="font-size: 0.72rem;">${escapeHtml(p.category)}</span></td>
+        <td>
+          <strong>${formatPrice(p.selling_price)}</strong>
+          <small style="display:block; text-decoration: line-through; color: var(--muted); font-size: 0.76rem;">${formatPrice(p.mrp)}</small>
+          <span style="color: var(--success); font-size: 0.74rem; font-weight: 700;">${p.discount}% OFF</span>
+        </td>
+        <td>
+          <strong>${escapeHtml(p.marketplace)}</strong>
+          ${extraOffersCount > 1 ? `<small style="display:block; color: var(--primary); font-size: 0.74rem;">+${extraOffersCount - 1} more offers</small>` : ''}
+        </td>
+        <td>
+          <span class="admin-pill ${isActive ? 'active' : 'inactive'}">
+            ${isActive ? 'Active' : 'Inactive'}
+          </span>
+        </td>
+        <td>
+          <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+            ${isFeatured ? '<span class="admin-pill featured">★ Featured</span>' : ''}
+            ${isBest ? '<span class="admin-pill best-value">👑 Best Value</span>' : ''}
+          </div>
+        </td>
+        <td>
+          <div class="admin-actions-cell">
+            <button type="button" class="btn btn-secondary btn-small" data-action="edit" data-id="${escapeHtml(p.id)}" title="Edit product details">Edit</button>
+            <button type="button" class="btn btn-small ${isActive ? 'btn-toggle-inactive' : 'btn-toggle-active'}" data-action="toggle-status" data-id="${escapeHtml(p.id)}" title="${isActive ? 'Deactivate product' : 'Activate product'}">
+              ${isActive ? 'Deactivate' : 'Activate'}
+            </button>
+            <button type="button" class="btn btn-small btn-toggle-featured" data-action="toggle-featured" data-id="${escapeHtml(p.id)}" title="Toggle featured status">
+              ${isFeatured ? '★ Unfeature' : '☆ Feature'}
+            </button>
+            <button type="button" class="btn btn-small btn-toggle-best" data-action="toggle-best" data-id="${escapeHtml(p.id)}" title="Toggle Best Value spotlight">
+              ${isBest ? '👑 Remove Best' : '👑 Set Best'}
+            </button>
+            <button type="button" class="btn btn-danger btn-small" data-action="delete" data-id="${escapeHtml(p.id)}" title="Delete or deactivate">Delete</button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+// ---------------------------------------------------------------------------
+// Selling price calculation (Formula: MRP * (1 - discount / 100))
+// ---------------------------------------------------------------------------
+
+function updateDiscountCalculation() {
+  const mrpInput = document.querySelector('[data-calc-mrp]');
+  const priceInput = document.querySelector('[data-calc-price]');
+  const discountInput = document.querySelector('[data-calc-discount]');
+
+  const mrp = Number(mrpInput.value);
+  const discount = Number(discountInput.value);
+
+  if (mrpInput.value !== '' && discountInput.value !== '' && mrp >= 0 && discount >= 0 && discount <= 100) {
+    priceInput.value = String(Math.round(mrp * (1 - discount / 100)));
+  } else {
+    priceInput.value = '';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Multiple Marketplace Offers Row Builder (Sections 10 & 11)
+// ---------------------------------------------------------------------------
+
+const MARKETPLACES = ['Amazon', 'Flipkart', 'Croma', 'Reliance Digital', 'Myntra', 'Meesho', 'Nykaa', 'Other Stores'];
 
 function createOfferRow(offer = {}) {
-  const marketplace = offer.marketplaceSlug || (offer.marketplace || '').toLowerCase().replace(/\s+/g, '-') || 'amazon';
-  const affiliateUrl = offer.affiliateUrl || '';
-  const affiliateStatus = isValidAffiliateUrl(affiliateUrl)
-    ? '<small class="affiliate-status is-configured" data-affiliate-status>✓ Affiliate link configured</small>'
-    : '<small class="affiliate-status is-missing" data-affiliate-status>⚠ Affiliate link not configured</small>';
-  return `<div class="admin-offer-row" data-offer-row>
-    <div class="admin-offer-heading"><strong>Marketplace offer</strong><button type="button" class="btn btn-secondary btn-small" data-remove-offer>Remove</button></div>
-    <div class="admin-offer-fields">
-      <label>Marketplace<select data-offer-marketplace required>${marketplaceOptions(marketplace)}</select></label>
-      <label>Other store name<input type="text" data-offer-store-name value="${escapeHtml(offer.storeName || '')}" placeholder="Only needed for Other Stores" /></label>
-      <label>Product URL<input type="url" data-offer-product-url value="${escapeHtml(offer.productUrl || offer.url || '')}" placeholder="https://example.com/product" required /></label>
-      <label>Affiliate URL<input type="url" data-offer-affiliate-url value="${escapeHtml(affiliateUrl)}" placeholder="https://partner.example/affiliate-link" />${affiliateStatus}</label>
-      <label>Current Price<input type="number" min="0" step="1" data-offer-price value="${offer.price ?? ''}" required /></label>
-      <label>Original Price<input type="number" min="0" step="1" data-offer-original-price value="${offer.originalPrice ?? ''}" required /></label>
-      <label>Discount (%)<input type="number" min="0" max="100" step="1" data-offer-discount value="${offer.discount ?? ''}" required /></label>
-      <label>Availability<input type="text" data-offer-availability value="${escapeHtml(offer.availability || 'Demo listing')}" required /></label>
+  const selectedMarket = offer.marketplace || 'Flipkart';
+  const price = offer.price ?? '';
+  const mrp = offer.mrp ?? '';
+  const disc = offer.discount ? `${offer.discount}% OFF` : '';
+  const url = offer.product_url || offer.url || '';
+  const avail = offer.availability || 'In Stock';
+  const storeName = offer.store_name || offer.storeName || '';
+
+  return `
+    <div class="admin-offer-row" data-offer-row>
+      <div class="admin-offer-heading">
+        <strong>Marketplace Store Offer</strong>
+        <button type="button" class="btn btn-secondary btn-small" data-remove-offer>Remove</button>
+      </div>
+      <div class="admin-offer-fields">
+        <label>Marketplace
+          <select data-offer-marketplace>
+            ${MARKETPLACES.map(m => `<option value="${m}" ${m === selectedMarket ? 'selected' : ''}>${m}</option>`).join('')}
+          </select>
+        </label>
+        <label>Store Name (Optional)
+          <input type="text" data-offer-store-name value="${escapeHtml(storeName)}" placeholder="e.g. Official Seller" />
+        </label>
+        <label>Offer Price (₹) *
+          <input type="number" min="0" step="1" data-offer-price value="${price}" placeholder="e.g. 2599" required />
+        </label>
+        <label>Offer MRP (₹)
+          <input type="number" min="0" step="1" data-offer-mrp value="${mrp}" placeholder="e.g. 3999" />
+        </label>
+        <label class="admin-full">Product Deal URL *
+          <input type="url" data-offer-url value="${escapeHtml(url)}" placeholder="https://www.store.com/item" required />
+        </label>
+        <label>Availability
+          <input type="text" data-offer-avail value="${escapeHtml(avail)}" placeholder="In Stock" />
+        </label>
+      </div>
     </div>
-  </div>`;
+  `;
 }
 
-function renderOffers(offers = []) {
+function renderOffersList(offers = []) {
   const root = document.querySelector('[data-admin-offers]');
-  root.innerHTML = (offers.length ? offers : [{}]).map(createOfferRow).join('');
-}
-
-function renderAdminList() {
-  const root = document.querySelector('[data-admin-product-list]');
-  root.innerHTML = adminProducts.map((product) => `<article class="admin-product-item">
-    <div><strong>${escapeHtml(product.name)}</strong><span>${escapeHtml(product.category)} · ${(product.comparison || []).length} offers · video ${escapeHtml(product.videoStatus || 'pending')}</span></div>
-    <div class="admin-product-actions"><button type="button" class="btn btn-secondary btn-small" data-edit-product="${escapeHtml(product.id)}">Edit</button><button type="button" class="btn btn-danger btn-small" data-delete-product="${escapeHtml(product.id)}">Delete</button></div>
-  </article>`).join('') || '<p class="admin-empty">No products saved yet.</p>';
-}
-
-function resetAdminForm() {
-  editingProductId = null;
-  selectedImageData = '';
-  document.querySelector('[data-admin-form]').reset();
-  document.querySelector('[data-admin-form-title]').textContent = 'Add product';
-  document.querySelector('[data-admin-submit]').textContent = 'Save product';
-  document.querySelector('[data-admin-image-preview]').removeAttribute('src');
-  document.querySelector('[data-admin-image-preview]').hidden = true;
-  setAdminVideoStatus('pending');
-  renderOffers();
-}
-
-function populateAdminForm(product) {
-  editingProductId = product.id;
-  selectedImageData = product.image || '';
-  const form = document.querySelector('[data-admin-form]');
-  form.elements.name.value = product.name || '';
-  form.elements.category.value = product.slug || '';
-  form.elements.brand.value = product.brand || '';
-  form.elements.description.value = product.description || '';
-  form.elements.imageUrl.value = product.image && !product.image.startsWith('data:') ? product.image : '';
-  document.querySelector('[data-admin-form-title]').textContent = `Edit ${product.name}`;
-  document.querySelector('[data-admin-submit]').textContent = 'Update product';
-  const preview = document.querySelector('[data-admin-image-preview]');
-  preview.src = product.image || '';
-  preview.hidden = !product.image;
-  setAdminVideoStatus(product.videoStatus || 'pending', product);
-  renderOffers(product.comparison);
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  root.innerHTML = (offers.length ? offers : []).map(createOfferRow).join('');
 }
 
 function collectOffers() {
-  return [...document.querySelectorAll('[data-offer-row]')].map((row) => {
-    const marketplaceField = row.querySelector('[data-offer-marketplace]');
-    const marketplace = adminConfig.marketplaces.find((item) => item.slug === marketplaceField.value);
+  return Array.from(document.querySelectorAll('[data-offer-row]')).map(row => {
+    const mrp = parseFloat(row.querySelector('[data-offer-mrp]').value) || 0;
+    const price = parseFloat(row.querySelector('[data-offer-price]').value) || 0;
+    const disc = mrp > 0 && price <= mrp ? Math.round(((mrp - price) / mrp) * 100) : 0;
+
     return {
-      marketplace: marketplace.name,
-      marketplaceSlug: marketplace.slug,
-      storeName: row.querySelector('[data-offer-store-name]').value.trim(),
-      productUrl: row.querySelector('[data-offer-product-url]').value.trim(),
-      affiliateUrl: row.querySelector('[data-offer-affiliate-url]').value.trim(),
-      url: row.querySelector('[data-offer-product-url]').value.trim(),
-      price: Number(row.querySelector('[data-offer-price]').value),
-      originalPrice: Number(row.querySelector('[data-offer-original-price]').value),
-      discount: Number(row.querySelector('[data-offer-discount]').value),
-      availability: row.querySelector('[data-offer-availability]').value.trim()
+      marketplace: row.querySelector('[data-offer-marketplace]').value,
+      store_name: row.querySelector('[data-offer-store-name]').value.trim(),
+      price: price,
+      mrp: mrp,
+      discount: disc,
+      product_url: row.querySelector('[data-offer-url]').value.trim(),
+      availability: row.querySelector('[data-offer-avail]').value.trim() || 'In Stock'
     };
-  });
+  }).filter(o => o.product_url && o.price > 0);
 }
 
-async function readSelectedImage() {
-  const file = document.querySelector('[data-admin-image-file]').files[0];
-  if (!file) return selectedImageData;
+// ---------------------------------------------------------------------------
+// Image Upload & Previews
+// ---------------------------------------------------------------------------
+
+async function uploadFileToServer(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
+    reader.onload = async () => {
+      try {
+        const res = await fetch('/api/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data: reader.result })
+        });
+        const data = await res.json();
+        if (res.ok && data.url) resolve(data.url);
+        else reject(new Error(data.message || 'Upload failed'));
+      } catch (err) {
+        reject(err);
+      }
+    };
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-  const form = document.querySelector('[data-admin-form]');
-  document.querySelector('[data-admin-category]').insertAdjacentHTML('beforeend', categoryOptions());
-  renderAdminList();
-  renderOffers();
-  setAdminVideoStatus('pending');
+function setupImageHandlers() {
+  const mainFileInput = document.querySelector('[data-admin-image-file]');
+  const mainUrlInput = document.querySelector('[data-admin-image-url]');
+  const mainPreview = document.querySelector('[data-admin-image-preview]');
+  const statusEl = document.querySelector('[data-admin-status]');
 
+  mainFileInput.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) {
+      statusEl.textContent = 'Image file exceeds 10 MB limit.';
+      statusEl.style.color = 'var(--danger)';
+      e.target.value = '';
+      return;
+    }
+    statusEl.textContent = 'Uploading main image...';
+    try {
+      const url = await uploadFileToServer(file);
+      selectedMainImage = url;
+      mainUrlInput.value = url;
+      mainPreview.src = url;
+      mainPreview.hidden = false;
+      statusEl.textContent = 'Main image uploaded successfully!';
+      statusEl.style.color = 'var(--success)';
+    } catch (err) {
+      statusEl.textContent = `Upload error: ${err.message}`;
+      statusEl.style.color = 'var(--danger)';
+    }
+  });
+
+  mainUrlInput.addEventListener('input', () => {
+    const url = mainUrlInput.value.trim();
+    if (url) {
+      selectedMainImage = url;
+      mainPreview.src = url;
+      mainPreview.hidden = false;
+    } else {
+      selectedMainImage = '';
+      mainPreview.hidden = true;
+    }
+  });
+
+  // Additional Images
+  const extraFilesInput = document.querySelector('[data-admin-extra-files]');
+  const extraUrlsInput = document.querySelector('[data-admin-extra-urls]');
+  const extraPreviewContainer = document.querySelector('[data-admin-extra-preview]');
+
+  extraFilesInput.addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files);
+    if (!files.length) return;
+    statusEl.textContent = `Uploading ${files.length} additional image(s)...`;
+
+    for (const file of files) {
+      try {
+        const url = await uploadFileToServer(file);
+        additionalImagesList.push(url);
+      } catch (err) {
+        console.error('Error uploading extra image:', err);
+      }
+    }
+    extraUrlsInput.value = additionalImagesList.join(', ');
+    renderExtraPreviews();
+    statusEl.textContent = 'Additional images uploaded!';
+    statusEl.style.color = 'var(--success)';
+  });
+
+  extraUrlsInput.addEventListener('input', () => {
+    const urls = extraUrlsInput.value.split(',').map(s => s.trim()).filter(Boolean);
+    additionalImagesList = urls;
+    renderExtraPreviews();
+  });
+}
+
+function renderExtraPreviews() {
+  const container = document.querySelector('[data-admin-extra-preview]');
+  container.innerHTML = additionalImagesList.map(url => `
+    <img src="${escapeHtml(url)}" class="admin-gallery-thumb" alt="Additional preview" onerror="this.style.display='none';" />
+  `).join('');
+}
+
+// ---------------------------------------------------------------------------
+// Form Population & Editing
+// ---------------------------------------------------------------------------
+
+function populateFormForEdit(product) {
+  editingProductId = product.id;
+  const form = document.querySelector('[data-admin-form]');
+
+  form.elements.id.value = product.id || '';
+  form.elements.id.readOnly = true;
+  form.elements.name.value = product.name || '';
+  form.elements.brand.value = product.brand || '';
+  form.elements.category.value = product.category || '';
+  form.elements.subcategory.value = product.subcategory || '';
+  form.elements.marketplace.value = product.marketplace || 'Amazon';
+  form.elements.mrp.value = product.mrp || '';
+  form.elements.selling_price.value = product.selling_price || '';
+  form.elements.discount.value = product.discount ?? 0;
+  form.elements.product_url.value = product.product_url || '';
+  form.elements.imageUrl.value = product.image || '';
+  form.elements.description.value = product.description || '';
+  form.elements.rating.value = product.rating ?? 4.5;
+  form.elements.review_count.value = product.review_count ?? 1250;
+  form.elements.availability.value = product.availability || 'In Stock';
+  form.elements.stock_status.value = product.stock_status || 'in_stock';
+  form.elements.status.value = product.status || 'active';
+  form.elements.featured.checked = product.featured === 1 || product.featured === true;
+  form.elements.best_value.checked = product.best_value === 1 || product.best_value === true;
+
+  selectedMainImage = product.image || '';
+  const mainPreview = document.querySelector('[data-admin-image-preview]');
+  if (selectedMainImage) {
+    mainPreview.src = selectedMainImage;
+    mainPreview.hidden = false;
+  } else {
+    mainPreview.hidden = true;
+  }
+
+  additionalImagesList = Array.isArray(product.additional_images) ? product.additional_images : [];
+  form.elements.additionalImagesUrls.value = additionalImagesList.join(', ');
+  renderExtraPreviews();
+
+  updateDiscountCalculation();
+
+  // Offers (exclude primary if duplicated)
+  const offers = (product.offers || product.comparison || []).filter(o => o.marketplace.toLowerCase() !== (product.marketplace || '').toLowerCase());
+  renderOffersList(offers);
+
+  document.querySelector('[data-admin-form-title]').textContent = `Edit Product: ${product.name}`;
+  document.querySelector('[data-admin-submit]').textContent = 'Update Product';
+  document.querySelector('[data-admin-cancel-edit]').hidden = false;
+
+  document.getElementById('product-form-panel').scrollIntoView({ behavior: 'smooth' });
+}
+
+function resetProductForm() {
+  editingProductId = null;
+  selectedMainImage = '';
+  additionalImagesList = [];
+
+  const form = document.querySelector('[data-admin-form]');
+  form.reset();
+  form.elements.id.readOnly = false;
+  form.elements.discount.value = '';
+  document.querySelector('[data-admin-image-preview]').hidden = true;
+  document.querySelector('[data-admin-extra-preview]').innerHTML = '';
+  renderOffersList([]);
+
+  document.querySelector('[data-admin-form-title]').textContent = 'Add New Product';
+  document.querySelector('[data-admin-submit]').textContent = 'Save Product';
+  document.querySelector('[data-admin-cancel-edit]').hidden = true;
+  document.querySelector('[data-admin-status]').textContent = '';
+}
+
+// ---------------------------------------------------------------------------
+// Form Submit Handler (Add / Edit)
+// ---------------------------------------------------------------------------
+
+async function handleProductSubmit(event) {
+  event.preventDefault();
+  const form = event.target;
+  const statusEl = document.querySelector('[data-admin-status]');
+  statusEl.textContent = 'Saving product...';
+  statusEl.style.color = 'var(--muted)';
+
+  const name = form.elements.name.value.trim();
+  const brand = form.elements.brand.value.trim();
+  const category = form.elements.category.value.trim();
+  const subcategory = form.elements.subcategory.value.trim();
+  const marketplace = form.elements.marketplace.value.trim();
+  const mrp = parseFloat(form.elements.mrp.value);
+  const selling_price = parseFloat(form.elements.selling_price.value);
+  const product_url = form.elements.product_url.value.trim();
+  const imageUrl = form.elements.imageUrl.value.trim() || selectedMainImage;
+  const description = form.elements.description.value.trim();
+  const rating = parseFloat(form.elements.rating.value) || 4.5;
+  const review_count = parseInt(form.elements.review_count.value) || 0;
+  const availability = form.elements.availability.value.trim() || 'In Stock';
+  const stock_status = form.elements.stock_status.value;
+  const status = form.elements.status.value;
+  const featured = form.elements.featured.checked ? 1 : 0;
+  const best_value = form.elements.best_value.checked ? 1 : 0;
+  const id = form.elements.id.value.trim();
+
+  // Validation
+  if (!name || !category || !marketplace || !product_url || !imageUrl || !description) {
+    statusEl.textContent = 'Please fill out all required fields marked with *.';
+    statusEl.style.color = 'var(--danger)';
+    return;
+  }
+
+  const discount = parseFloat(form.elements.discount.value);
+  if (isNaN(mrp) || mrp < 0 || isNaN(discount) || discount < 0 || discount > 100 || isNaN(selling_price) || selling_price < 0) {
+    statusEl.textContent = 'Enter a valid MRP and a discount from 0% to 100%.';
+    statusEl.style.color = 'var(--danger)';
+    return;
+  }
+
+  const extraOffers = collectOffers();
+
+  const payload = {
+    id: id || undefined,
+    name,
+    brand,
+    category,
+    subcategory,
+    marketplace,
+    mrp,
+    selling_price,
+    product_url,
+    image: imageUrl,
+    additional_images: additionalImagesList,
+    description,
+    rating,
+    review_count,
+    availability,
+    stock_status,
+    status,
+    featured,
+    best_value,
+    offers: extraOffers
+  };
+
+  try {
+    let res;
+    if (editingProductId) {
+      res = await fetch(`/api/products/${encodeURIComponent(editingProductId)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+    } else {
+      res = await fetch('/api/products', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+    }
+
+    const data = await res.json();
+    if (res.ok && (data.success || data.id)) {
+      statusEl.textContent = editingProductId ? 'Product updated successfully!' : 'Product added successfully!';
+      statusEl.style.color = 'var(--success)';
+      resetProductForm();
+      await loadProducts();
+    } else {
+      statusEl.textContent = data.message || 'Error saving product.';
+      statusEl.style.color = 'var(--danger)';
+    }
+  } catch (err) {
+    statusEl.textContent = `Server error: ${err.message}`;
+    statusEl.style.color = 'var(--danger)';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Quick Actions (Toggle Status, Featured, Best Value, Delete)
+// ---------------------------------------------------------------------------
+
+async function handleTableActions(event) {
+  const btn = event.target.closest('button[data-action]');
+  if (!btn) return;
+
+  const action = btn.dataset.action;
+  const productId = btn.dataset.id;
+  const product = adminProducts.find(p => p.id === productId);
+
+  if (action === 'edit' && product) {
+    populateFormForEdit(product);
+  } else if (action === 'toggle-status') {
+    try {
+      const res = await fetch(`/api/products/${encodeURIComponent(productId)}/status`, { method: 'PATCH' });
+      if (res.ok) await loadProducts();
+    } catch (e) {
+      console.error(e);
+    }
+  } else if (action === 'toggle-featured') {
+    try {
+      const res = await fetch(`/api/products/${encodeURIComponent(productId)}/featured`, { method: 'PATCH' });
+      if (res.ok) await loadProducts();
+    } catch (e) {
+      console.error(e);
+    }
+  } else if (action === 'toggle-best') {
+    try {
+      const res = await fetch(`/api/products/${encodeURIComponent(productId)}/best-value`, { method: 'PATCH' });
+      if (res.ok) await loadProducts();
+    } catch (e) {
+      console.error(e);
+    }
+  } else if (action === 'delete') {
+    openDeleteModal(productId, product ? product.name : 'this product');
+  }
+}
+
+function openDeleteModal(productId, productName) {
+  pendingDeleteProductId = productId;
+  const modal = document.querySelector('[data-admin-delete-modal]');
+  document.querySelector('[data-delete-modal-text]').textContent = `Do you want to soft-deactivate "${productName}" or permanently delete it from the database?`;
+  modal.hidden = false;
+  modal.style.display = 'grid';
+}
+
+function closeDeleteModal() {
+  pendingDeleteProductId = null;
+  const modal = document.querySelector('[data-admin-delete-modal]');
+  if (modal) {
+    modal.hidden = true;
+    modal.style.display = 'none';
+  }
+}
+
+async function performDelete(permanent = false) {
+  if (!pendingDeleteProductId) return;
+  const id = pendingDeleteProductId;
+  closeDeleteModal();
+
+  try {
+    const res = await fetch(`/api/products/${encodeURIComponent(id)}?permanent=${permanent ? 'true' : 'false'}`, {
+      method: 'DELETE'
+    });
+    if (res.ok) {
+      await loadProducts();
+      if (editingProductId === id) resetProductForm();
+    }
+  } catch (err) {
+    alert(`Error deleting product: ${err.message}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Initialization
+// ---------------------------------------------------------------------------
+
+document.addEventListener('DOMContentLoaded', () => {
+  // Check session status on page load
+  checkAdminSession();
+
+  // Login form
+  document.querySelector('[data-admin-login-form]').addEventListener('submit', handleAdminLogin);
+
+  // Logout button
+  document.querySelector('[data-admin-logout-btn]').addEventListener('click', handleAdminLogout);
+
+  // Discount calculation listeners
+  document.querySelector('[data-calc-mrp]').addEventListener('input', updateDiscountCalculation);
+  document.querySelector('[data-calc-discount]').addEventListener('input', updateDiscountCalculation);
+
+  // Add offer row button
   document.querySelector('[data-add-offer]').addEventListener('click', () => {
     document.querySelector('[data-admin-offers]').insertAdjacentHTML('beforeend', createOfferRow());
   });
 
-  document.querySelector('[data-admin-offers]').addEventListener('click', (event) => {
-    if (!event.target.matches('[data-remove-offer]')) return;
-    const rows = document.querySelectorAll('[data-offer-row]');
-    if (rows.length === 1) return;
-    event.target.closest('[data-offer-row]').remove();
-  });
-
-  document.querySelector('[data-admin-offers]').addEventListener('input', (event) => {
-    if (!event.target.matches('[data-offer-affiliate-url]')) return;
-    const status = event.target.parentElement.querySelector('[data-affiliate-status]');
-    const configured = isValidAffiliateUrl(event.target.value.trim());
-    status.className = `affiliate-status ${configured ? 'is-configured' : 'is-missing'}`;
-    status.textContent = configured ? '✓ Affiliate link configured' : '⚠ Affiliate link not configured';
-  });
-
-  document.querySelector('[data-admin-image-file]').addEventListener('change', async (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > maxImageBytes) {
-      event.target.value = '';
-      document.querySelector('[data-admin-status]').textContent = 'Use a JPG, PNG, or WEBP image up to 10 MB.';
-      return;
-    }
-    const preview = document.querySelector('[data-admin-image-preview]');
-    preview.src = URL.createObjectURL(file);
-    preview.hidden = false;
-    setAdminVideoStatus('processing');
-  });
-
-  document.querySelector('[data-regenerate-video]').addEventListener('click', async () => {
-    const product = adminProducts.find((item) => item.id === editingProductId);
-    if (!product) return;
-    await generateProductVideo(product);
-  });
-
-  form.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const formData = new FormData(form);
-    const offers = collectOffers();
-    const imageUrl = formData.get('imageUrl').trim();
-    const image = await readSelectedImage() || imageUrl;
-    const missingOtherStoreName = offers.some((offer) => offer.marketplaceSlug === 'other-stores' && !offer.storeName);
-    const invalidAffiliate = offers.some((offer) => !isValidAffiliateUrl(offer.affiliateUrl));
-    const duplicateMarketplace = new Set(offers.map((offer) => offer.marketplaceSlug)).size !== offers.length;
-    if (!form.reportValidity() || !image || !offers.length || missingOtherStoreName || invalidAffiliate || duplicateMarketplace) {
-      document.querySelector('[data-admin-status]').textContent = invalidAffiliate
-        ? 'Please enter a valid HTTP/HTTPS affiliate URL for every offer.'
-        : duplicateMarketplace
-          ? 'Each marketplace may appear only once per product.'
-          : 'Add a product image and at least one complete marketplace offer.';
-      return;
-    }
-
-    const category = adminConfig.categories.find((item) => item.slug === formData.get('category'));
-    const firstOffer = offers[0];
-    const existingProduct = adminProducts.find((item) => item.id === editingProductId);
-    const imageChanged = !existingProduct || existingProduct.image !== image;
-    const product = {
-      id: editingProductId || `product-${Date.now()}`,
-      name: formData.get('name').trim(),
-      image,
-      category: category.name,
-      slug: category.slug,
-      brand: formData.get('brand').trim(),
-      description: formData.get('description').trim(),
-      price: firstOffer.price,
-      originalPrice: firstOffer.originalPrice,
-      discount: firstOffer.discount,
-      currentPrice: firstOffer.price,
-      oldPrice: firstOffer.originalPrice,
-      rating: 0,
-      reviews: 0,
-      features: [],
-      comparison: offers,
-      isFeatured: true,
-      isDeal: true,
-      productVideoUrl: imageChanged ? '' : (existingProduct?.productVideoUrl || ''),
-      videoStatus: imageChanged ? 'pending' : (existingProduct?.videoStatus || 'pending'),
-      videoJobId: imageChanged ? '' : (existingProduct?.videoJobId || ''),
-      videoGeneratedAt: imageChanged ? '' : (existingProduct?.videoGeneratedAt || '')
-    };
-
-    const existingIndex = adminProducts.findIndex((item) => item.id === product.id);
-    if (existingIndex >= 0) adminProducts[existingIndex] = product; else adminProducts.unshift(product);
-    saveAdminProducts();
-    renderAdminList();
-    document.querySelector('[data-admin-status]').textContent = `${product.name} saved locally. Generating AI Product Video...`;
-    populateAdminForm(product);
-    setAdminVideoStatus('processing', product);
-    await generateProductVideo(product);
-  });
-
-  document.querySelector('[data-admin-product-list]').addEventListener('click', (event) => {
-    const editButton = event.target.closest('[data-edit-product]');
-    const deleteButton = event.target.closest('[data-delete-product]');
-    if (editButton) {
-      const product = adminProducts.find((item) => item.id === editButton.dataset.editProduct);
-      if (product) populateAdminForm(product);
-    }
-    if (deleteButton && window.confirm('Delete this local product?')) {
-      adminProducts = adminProducts.filter((item) => item.id !== deleteButton.dataset.deleteProduct);
-      saveAdminProducts();
-      renderAdminList();
-      document.querySelector('[data-admin-status]').textContent = 'Product deleted from local storage.';
+  // Remove offer row button
+  document.querySelector('[data-admin-offers]').addEventListener('click', (e) => {
+    if (e.target.matches('[data-remove-offer]')) {
+      e.target.closest('[data-offer-row]').remove();
     }
   });
 
-  document.querySelector('[data-admin-reset]').addEventListener('click', resetAdminForm);
+  // Image upload handlers
+  setupImageHandlers();
+
+  // Product form submit
+  document.querySelector('[data-admin-form]').addEventListener('submit', handleProductSubmit);
+
+  // Form Reset / Cancel Edit
+  document.querySelector('[data-admin-reset]').addEventListener('click', resetProductForm);
+  document.querySelector('[data-admin-cancel-edit]').addEventListener('click', resetProductForm);
+
+  // Table action clicks (edit, toggles, delete)
+  document.querySelector('[data-admin-table-body]').addEventListener('click', handleTableActions);
+
+  // Filters and search
+  document.querySelector('[data-admin-search]').addEventListener('input', renderProductTable);
+  document.querySelector('[data-admin-filter-status]').addEventListener('change', renderProductTable);
+  document.querySelector('[data-admin-filter-category]').addEventListener('change', renderProductTable);
+  document.querySelector('[data-admin-filter-market]').addEventListener('change', renderProductTable);
+  document.querySelector('[data-admin-sort]').addEventListener('change', renderProductTable);
+
+  // Delete modal buttons
+  document.querySelector('[data-delete-cancel]').addEventListener('click', closeDeleteModal);
+  document.querySelector('[data-delete-soft]').addEventListener('click', () => performDelete(false));
+  document.querySelector('[data-delete-permanent]').addEventListener('click', () => performDelete(true));
 });

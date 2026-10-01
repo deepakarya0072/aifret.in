@@ -26,7 +26,7 @@
       <div class="page-header">
         <span class="section-kicker">Compare prices</span>
         <h1>Find the best available offer</h1>
-        <p>Compare demo marketplace listings for each product. Prices and availability are placeholders until live feeds are connected.</p>
+        <p>Compare the offers currently listed in the AIFRET catalog. Prices and availability are provided by each store and may change.</p>
       </div>
 
       <div class="compare-controls" aria-label="Compare price filters">
@@ -54,10 +54,6 @@
     </footer>
     <script src="assets/js/config.js"></script>
     <script src="assets/js/auth-client.js?v=customer-auth-1"></script>
-    <script src="assets/js/app.js?v=customer-auth-4"></script>
-    <script>
-      document.querySelector('[data-compare-category]').insertAdjacentHTML('beforeend', window.AIFRET_CONFIG.categories.map((item) => `<option value="${item.slug}">${item.name}</option>`).join(''));
-      document.querySelector('[data-compare-marketplace]').insertAdjacentHTML('beforeend', window.AIFRET_CONFIG.marketplaces.map((item) => `<option value="${item.slug}">${item.name}</option>`).join(''));
-    </script>
+    <script src="assets/js/app.js?v=customer-auth-6"></script>
   </body>
 </html>
