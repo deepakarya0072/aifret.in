@@ -540,6 +540,7 @@ function renderProductDetail() {
         <div class="product-actions">
           <a href="${selectedOffer.url}" class="btn btn-primary" target="_blank" rel="noopener noreferrer">View Deal</a>
           <a href="deals.html" class="btn btn-secondary">See More Deals</a>
+          <button type="button" class="btn btn-primary" data-ai-tryon-trigger data-product-id="${product.id}" data-product-name="${product.name}" data-product-image="${product.image}"><span>✨</span> AI Video Try-On</button>
         </div>
       </div>
     </div>

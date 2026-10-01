@@ -14,6 +14,7 @@ import os
 import sys
 import json
 import sqlite3
+import base64
 import hashlib
 import secrets
 import mimetypes
@@ -26,6 +27,53 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
 DB_PATH = os.path.join(DATA_DIR, "aifret.db")
 PORT = int(os.environ.get("PORT", 8000))
+AI_VIDEO_PROVIDER = os.environ.get("AI_VIDEO_PROVIDER", "mock").strip().lower()
+AI_VIDEO_API_KEY = os.environ.get("AI_VIDEO_API_KEY", "").strip()
+AI_VIDEO_MODEL = os.environ.get("AI_VIDEO_MODEL", "aifret-tryon-mock").strip()
+AI_VIDEO_MAX_GENERATIONS_PER_CUSTOMER = max(1, int(os.environ.get("AI_VIDEO_MAX_GENERATIONS_PER_CUSTOMER", "3").strip() or 3))
+
+
+class BaseAIVideoProvider:
+    name = 'base'
+
+    def __init__(self, api_key=None, model=None):
+        self.api_key = api_key or ''
+        self.model = model or 'default'
+
+    def submit_generation(self, *, customer_id, product_id, product_image, customer_photo, product_name=None):
+        raise NotImplementedError
+
+    def poll_status(self, *, job_id, provider_job_id, current_status, product_name=None):
+        return {"status": current_status, "progress": 100 if current_status == 'completed' else 0, "video_url": None}
+
+
+class MockAIVideoProvider(BaseAIVideoProvider):
+    name = 'mock'
+
+    def submit_generation(self, *, customer_id, product_id, product_image, customer_photo, product_name=None):
+        return {
+            "job_id": f"mock-tryon-{secrets.token_hex(10)}",
+            "status": "processing",
+            "progress": 18,
+            "video_url": None,
+            "provider": self.name,
+            "message": "Queued for AI fashion video generation."
+        }
+
+    def poll_status(self, *, job_id, provider_job_id, current_status, product_name=None):
+        if current_status == 'completed':
+            return {"status": 'completed', "progress": 100, "video_url": 'https://samplelib.com/lib/preview/mp4/sample-10s.mp4'}
+
+        progress = 18
+        if job_id:
+            progress = min(100, 18 + (len(job_id) % 6) * 11)
+        return {"status": 'processing', "progress": progress, "video_url": None}
+
+
+def get_ai_video_provider():
+    if AI_VIDEO_PROVIDER == 'mock':
+        return MockAIVideoProvider(api_key=AI_VIDEO_API_KEY, model=AI_VIDEO_MODEL)
+    return MockAIVideoProvider(api_key=AI_VIDEO_API_KEY, model=AI_VIDEO_MODEL)
 
 # Ensure required directories exist
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -214,6 +262,27 @@ def init_database():
     );
     """)
 
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS customer_ai_tryon_jobs (
+        id TEXT PRIMARY KEY,
+        customer_id TEXT NOT NULL,
+        product_id TEXT NOT NULL,
+        product_name TEXT DEFAULT '',
+        product_image TEXT DEFAULT '',
+        uploaded_photo TEXT DEFAULT '',
+        video_url TEXT DEFAULT '',
+        provider_job_id TEXT DEFAULT '',
+        provider TEXT DEFAULT 'mock',
+        status TEXT DEFAULT 'queued',
+        progress INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL,
+        completed_at TEXT DEFAULT '',
+        error_message TEXT DEFAULT '',
+        FOREIGN KEY (customer_id) REFERENCES customer_users(customer_id) ON DELETE CASCADE,
+        FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+    );
+    """)
+
     # Indexes for performance
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_products_status ON products(status);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);")
@@ -229,6 +298,8 @@ def init_database():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_wishlist_customer ON customer_wishlist(customer_id);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_recently_viewed_customer ON customer_recently_viewed(customer_id);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_ai_previews_customer ON customer_ai_previews(customer_id);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_ai_tryon_customer ON customer_ai_tryon_jobs(customer_id);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_ai_tryon_product ON customer_ai_tryon_jobs(product_id);")
 
     # Default Admin Creation
     cursor.execute("SELECT COUNT(*) FROM admin_users;")
@@ -646,6 +717,16 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
         path = parsed_url.path
         query = urllib.parse.parse_qs(parsed_url.query)
 
+        if path.startswith('/api/ai-tryon/status/'):
+            job_id = path[len('/api/ai-tryon/status/'):].strip()
+            if job_id:
+                self.handle_ai_tryon_status(job_id)
+                return
+
+        if path == '/api/ai-tryon/generate':
+            self.handle_ai_tryon_generate()
+            return
+
         # 1. Product Listing API: /api/products
         if path == '/api/products':
             self.handle_get_products(query)
@@ -981,12 +1062,17 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
             self.handle_customer_recently_viewed_post()
             return
 
-        # 9. Image Upload
+        # 9. AI Try-On Generation
+        if path == '/api/ai-tryon/generate':
+            self.handle_ai_tryon_generate()
+            return
+
+        # 10. Image Upload
         if path == '/api/upload':
             self.handle_image_upload()
             return
 
-        # 10. Add Product
+        # 11. Add Product
         if path == '/api/products':
             self.handle_add_product()
             return
@@ -1242,6 +1328,169 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
         conn.commit()
         conn.close()
         self.send_json({"success": True})
+
+    def validate_image_data_url(self, image_string):
+        if not image_string or not isinstance(image_string, str):
+            return None
+        if not image_string.startswith('data:image/') or ', ' not in image_string and ',' not in image_string:
+            return None
+        header, _, encoded = image_string.partition(',')
+        if not encoded:
+            return None
+        mime_type = header.replace('data:', '').split(';', 1)[0].strip().lower()
+        if mime_type not in ['image/jpeg', 'image/png', 'image/webp']:
+            return None
+        try:
+            image_bytes = base64.b64decode(encoded)
+        except Exception:
+            return None
+        if len(image_bytes) == 0 or len(image_bytes) > 10 * 1024 * 1024:
+            return None
+        return {"mime_type": mime_type, "data": image_bytes, "bytes": len(image_bytes)}
+
+    def handle_ai_tryon_generate(self):
+        customer = self.authenticate_customer()
+        if not customer:
+            self.send_error_json("Please login to your AIFRET account to continue.", status=401)
+            return
+
+        body = self.get_json_body() or {}
+        if not isinstance(body, dict):
+            self.send_error_json("Invalid JSON format")
+            return
+
+        customer_id = str(body.get('customer_id') or body.get('customerId') or customer['customerId']).strip()
+        product_id = str(body.get('product_id') or body.get('productId') or '').strip()
+        product_image = str(body.get('product_image') or body.get('productImage') or '').strip()
+        customer_photo = str(body.get('customer_photo') or body.get('customerPhoto') or '').strip()
+        product_name = str(body.get('product_name') or body.get('productName') or '').strip()
+
+        if not product_id:
+            self.send_error_json("Product ID is required")
+            return
+        if not customer_photo:
+            self.send_error_json("Customer photo is required")
+            return
+        if customer_id != customer['customerId']:
+            self.send_error_json("Customer identity mismatch.", status=403)
+            return
+
+        validation = self.validate_image_data_url(customer_photo)
+        if not validation:
+            self.send_error_json("Uploaded photo must be a valid JPG, PNG, or WebP image under 10MB.")
+            return
+
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM products WHERE id = ?", (product_id,))
+        product = cursor.fetchone()
+        if not product:
+            conn.close()
+            self.send_error_json("Selected product was not found.", status=404)
+            return
+
+        cursor.execute("SELECT COUNT(*) FROM customer_ai_tryon_jobs WHERE customer_id = ? AND status IN ('queued', 'processing')", (customer_id,))
+        if cursor.fetchone()[0] > 0:
+            conn.close()
+            self.send_error_json("A try-on generation is already in progress for your account. Please wait for it to finish.", status=409)
+            return
+
+        cursor.execute("SELECT COUNT(*) FROM customer_ai_tryon_jobs WHERE customer_id = ? AND status = 'completed'", (customer_id,))
+        if cursor.fetchone()[0] >= AI_VIDEO_MAX_GENERATIONS_PER_CUSTOMER:
+            conn.close()
+            self.send_error_json(f"You have reached the generation limit of {AI_VIDEO_MAX_GENERATIONS_PER_CUSTOMER} videos for this account.", status=429)
+            return
+
+        provider = get_ai_video_provider()
+        provider_result = provider.submit_generation(
+            customer_id=customer_id,
+            product_id=product_id,
+            product_image=product_image or product['image'],
+            customer_photo=customer_photo,
+            product_name=product_name or product['name']
+        )
+
+        job_id = f"ai-tryon-{secrets.token_hex(12)}"
+        created_at = datetime.now().isoformat()
+
+        cursor.execute("""
+            INSERT INTO customer_ai_tryon_jobs (
+                id, customer_id, product_id, product_name, product_image, uploaded_photo,
+                video_url, provider_job_id, provider, status, progress, created_at, completed_at, error_message
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            job_id,
+            customer_id,
+            product_id,
+            product_name or product['name'],
+            product_image or product['image'],
+            customer_photo,
+            '',
+            provider_result.get('job_id', ''),
+            provider_result.get('provider', 'mock'),
+            provider_result.get('status', 'queued'),
+            int(provider_result.get('progress', 0) or 0),
+            created_at,
+            '',
+            ''
+        ))
+        conn.commit()
+        conn.close()
+
+        self.send_json({
+            "success": True,
+            "job_id": job_id,
+            "status": provider_result.get('status', 'processing'),
+            "progress": int(provider_result.get('progress', 0) or 0),
+            "message": provider_result.get('message', 'AI video generation started.')
+        })
+
+    def handle_ai_tryon_status(self, job_id):
+        customer = self.authenticate_customer()
+        if not customer:
+            self.send_error_json("Please login to your AIFRET account to continue.", status=401)
+            return
+
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM customer_ai_tryon_jobs WHERE id = ? AND customer_id = ?", (job_id, customer['customerId']))
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            self.send_error_json("AI try-on job not found.", status=404)
+            return
+
+        provider = get_ai_video_provider()
+        current_status = row['status']
+        current_progress = int(row['progress'] or 0)
+
+        if current_status in ['queued', 'processing']:
+            provider_result = provider.poll_status(
+                job_id=row['id'],
+                provider_job_id=row['provider_job_id'],
+                current_status=current_status,
+                product_name=row['product_name']
+            )
+            next_status = provider_result.get('status', current_status)
+            next_progress = int(provider_result.get('progress', current_progress) or current_progress)
+
+            if next_status == 'completed':
+                next_progress = 100
+                completed_at = datetime.now().isoformat()
+                video_url = provider_result.get('video_url') or row['video_url'] or 'https://samplelib.com/lib/preview/mp4/sample-10s.mp4'
+                cursor.execute("UPDATE customer_ai_tryon_jobs SET status = ?, progress = ?, video_url = ?, completed_at = ? WHERE id = ?", (next_status, next_progress, video_url, completed_at, row['id']))
+                conn.commit()
+                response = {"status": next_status, "progress": next_progress, "video_url": video_url}
+            else:
+                next_progress = max(current_progress, min(95, next_progress))
+                cursor.execute("UPDATE customer_ai_tryon_jobs SET status = ?, progress = ? WHERE id = ?", (next_status, next_progress, row['id']))
+                conn.commit()
+                response = {"status": next_status, "progress": next_progress}
+        else:
+            response = {"status": current_status, "progress": current_progress, "video_url": row['video_url'] or None}
+
+        conn.close()
+        self.send_json(response)
 
     def handle_image_upload(self):
         admin = self.authenticate_admin()

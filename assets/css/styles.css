@@ -1410,6 +1410,183 @@ body {
   flex-wrap: wrap;
 }
 
+/* AI Try-On modal */
+.ai-tryon-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: rgba(15, 23, 42, 0.7);
+  backdrop-filter: blur(4px);
+  display: grid;
+  place-items: center;
+  padding: 18px;
+}
+
+.ai-tryon-backdrop[hidden] {
+  display: none !important;
+}
+
+.ai-tryon-modal {
+  position: relative;
+  width: min(760px, 100%);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  box-shadow: 0 28px 60px rgba(15, 23, 42, 0.28);
+  padding: 24px;
+}
+
+.ai-tryon-close {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 50%;
+  background: var(--bg-soft);
+  color: var(--text);
+  font-size: 1.35rem;
+  cursor: pointer;
+}
+
+.ai-tryon-header {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 22px;
+}
+
+.ai-tryon-header.center {
+  text-align: center;
+}
+
+.ai-tryon-header h3 {
+  margin: 0;
+  font-size: clamp(1.6rem, 2vw, 2.2rem);
+  letter-spacing: -0.03em;
+}
+
+.ai-tryon-header p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.ai-tryon-upload-wrap {
+  margin-bottom: 18px;
+}
+
+.ai-tryon-upload-dropzone {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  min-height: 160px;
+  border: 2px dashed var(--line);
+  border-radius: 18px;
+  background: var(--bg-soft);
+  text-align: center;
+  padding: 18px;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.ai-tryon-upload-dropzone:hover {
+  border-color: var(--primary);
+  background: rgba(36, 87, 255, 0.03);
+}
+
+.ai-tryon-upload-icon {
+  font-size: 2.2rem;
+}
+
+.ai-tryon-upload-dropzone small {
+  color: var(--muted);
+}
+
+.ai-tryon-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.ai-tryon-preview-card {
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.ai-tryon-preview-label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.ai-tryon-preview-card img {
+  width: 100%;
+  height: 200px;
+  object-fit: cover;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #eef4ff, #fdf3ff);
+}
+
+.ai-tryon-generate {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.ai-tryon-progress-box {
+  padding: 22px;
+  background: var(--bg-soft);
+  border: 1px solid rgba(36, 87, 255, 0.18);
+  border-radius: 18px;
+}
+
+.ai-tryon-video-shell {
+  width: 100%;
+  max-width: 560px;
+  margin: 0 auto 20px;
+  aspect-ratio: 9 / 16;
+  border-radius: 20px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: #0f172a;
+  box-shadow: 0 22px 50px rgba(15, 23, 42, 0.25);
+}
+
+.ai-tryon-video-shell video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #0f172a;
+}
+
+.ai-tryon-result-actions {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 720px) {
+  .ai-tryon-modal {
+    padding: 18px 14px 20px;
+  }
+  .ai-tryon-preview-grid {
+    grid-template-columns: 1fr;
+  }
+  .ai-tryon-result-actions {
+    flex-direction: column;
+  }
+  .ai-tryon-result-actions .btn {
+    width: 100%;
+  }
+}
+
 /* ==========================================================================
    Product Media & 10-Second Video Studio Styles
    ========================================================================== */
