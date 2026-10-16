@@ -47,9 +47,14 @@
     <!-- Admin Dashboard (shown once authenticated) -->
     <main class="container admin-shell" data-admin-dashboard-view hidden>
       <div class="admin-intro">
-        <span class="section-kicker">Product Management</span>
-        <h1>Catalog & Marketplace Control</h1>
-        <p>Manage products, pricing, discounts, and multiple marketplace offers. Changes immediately update across the entire AIFRET website.</p>
+        <div class="admin-panel-heading">
+          <div>
+            <span class="section-kicker">Product Management</span>
+            <h1>Catalog & Marketplace Control</h1>
+            <p>Manage products, pricing, discounts, and multiple marketplace offers. Published changes update across AIFRET.</p>
+          </div>
+          <button type="button" class="btn btn-primary" data-admin-add-product>+ Add Product</button>
+        </div>
       </div>
 
       <!-- Quick Catalog Counters -->
@@ -60,11 +65,11 @@
         </div>
         <div class="admin-stat-card">
           <span class="admin-stat-num" style="color: var(--success);" data-stat-active>0</span>
-          <span class="admin-stat-label">Active</span>
+          <span class="admin-stat-label">Published</span>
         </div>
         <div class="admin-stat-card">
           <div class="admin-stat-num" style="color: var(--danger);" data-stat-inactive>0</div>
-          <span class="admin-stat-label">Inactive</span>
+          <span class="admin-stat-label">Drafts</span>
         </div>
         <div class="admin-stat-card">
           <span class="admin-stat-num" style="color: var(--primary);" data-stat-featured>0</span>
@@ -106,18 +111,17 @@
 
               <!-- Field 4: Category -->
               <label>Category *
-                <select name="category" data-admin-category required>
-                  <option value="">Select Category</option>
-                  <option value="Earbuds">Earbuds</option>
-                  <option value="Electronics">Electronics</option>
-                  <option value="Mobiles">Mobiles</option>
-                  <option value="Laptops">Laptops</option>
-                  <option value="Fashion">Fashion</option>
-                  <option value="Shoes">Shoes</option>
-                  <option value="Beauty">Beauty</option>
-                  <option value="Home & Kitchen">Home & Kitchen</option>
-                  <option value="Watches">Watches</option>
-                </select>
+                <input name="category" list="admin-category-options" required placeholder="Choose or enter a category" />
+                <datalist id="admin-category-options" data-admin-category-options>
+                  <option value="Electronics"></option>
+                  <option value="Mobiles"></option>
+                  <option value="Laptops"></option>
+                  <option value="Fashion"></option>
+                  <option value="Shoes"></option>
+                  <option value="Beauty"></option>
+                  <option value="Home & Kitchen"></option>
+                  <option value="Watches"></option>
+                </datalist>
               </label>
 
               <!-- Field 5: Subcategory -->
@@ -127,16 +131,14 @@
 
               <!-- Field 12: Primary Marketplace -->
               <label>Primary Marketplace *
-                <select name="marketplace" data-admin-primary-market required>
-                  <option value="Amazon">Amazon</option>
-                  <option value="Flipkart">Flipkart</option>
-                  <option value="Myntra">Myntra</option>
-                  <option value="Croma">Croma</option>
-                  <option value="Reliance Digital">Reliance Digital</option>
-                  <option value="Meesho">Meesho</option>
-                  <option value="Nykaa">Nykaa</option>
-                  <option value="Other Stores">Other Stores</option>
-                </select>
+                <input name="marketplace" list="admin-marketplace-options" data-admin-primary-market required placeholder="Choose or enter a store" />
+                <datalist id="admin-marketplace-options" data-admin-marketplace-options>
+                  <option value="Amazon"></option>
+                  <option value="Flipkart"></option>
+                  <option value="Meesho"></option>
+                  <option value="Myntra"></option>
+                  <option value="Other Stores"></option>
+                </datalist>
               </label>
 
               <!-- Field 9: MRP -->
@@ -158,13 +160,16 @@
               <label class="admin-full">Marketplace Product URL *
                 <input name="product_url" type="url" required placeholder="https://www.amazon.in/dp/example" />
               </label>
+              <label class="admin-full">Primary Affiliate URL
+                <input name="affiliate_url" type="url" placeholder="Optional tracking-enabled destination URL" />
+              </label>
 
               <!-- Field 6: Main Product Image -->
               <label>Image URL
                 <input name="imageUrl" type="url" placeholder="https://example.com/product.jpg" data-admin-image-url />
               </label>
               <label>Upload Main Image File
-                <input type="file" accept="image/*" data-admin-image-file />
+                <input type="file" accept="image/jpeg,image/png,image/webp" data-admin-image-file />
               </label>
 
               <div class="admin-full">
@@ -177,7 +182,7 @@
                 <input name="additionalImagesUrls" type="text" placeholder="https://image1.jpg, https://image2.jpg" data-admin-extra-urls />
               </label>
               <label class="admin-full">Upload Additional Images
-                <input type="file" accept="image/*" multiple data-admin-extra-files />
+                <input type="file" accept="image/jpeg,image/png,image/webp" multiple data-admin-extra-files />
               </label>
               <div class="admin-full">
                 <div class="admin-gallery-preview" data-admin-extra-preview></div>
@@ -213,10 +218,10 @@
               </label>
 
               <!-- Field 20: Product Status -->
-              <label>Product Status
+              <label>Publication Status
                 <select name="status">
-                  <option value="active">Active (Visible on website)</option>
-                  <option value="inactive">Inactive (Hidden / Soft-deleted)</option>
+                  <option value="inactive">Draft (Hidden from website)</option>
+                  <option value="active">Published (Visible on website)</option>
                 </select>
               </label>
 
@@ -266,8 +271,8 @@
             <input type="search" class="admin-search-box" placeholder="Search products, brands..." data-admin-search />
             <select data-admin-filter-status aria-label="Filter by Status">
               <option value="all">All Status</option>
-              <option value="active">Active Only</option>
-              <option value="inactive">Inactive Only</option>
+              <option value="active">Published Only</option>
+              <option value="inactive">Drafts Only</option>
             </select>
             <select data-admin-filter-category aria-label="Filter by Category">
               <option value="all">All Categories</option>
@@ -306,6 +311,11 @@
               </tbody>
             </table>
           </div>
+          <div class="admin-pagination" aria-label="Product catalogue pagination">
+            <button type="button" class="btn btn-secondary btn-small" data-admin-page-prev disabled>Previous</button>
+            <span data-admin-page-info role="status">Page 1</span>
+            <button type="button" class="btn btn-secondary btn-small" data-admin-page-next disabled>Next</button>
+          </div>
         </aside>
       </div>
     </main>
@@ -324,6 +334,6 @@
     </div>
 
     <script src="assets/js/config.js"></script>
-    <script src="assets/js/admin.js?v=product-system-4"></script>
+    <script src="assets/js/admin.js?v=product-management-5"></script>
   </body>
 </html>

@@ -8,6 +8,10 @@ let editingProductId = null;
 let selectedMainImage = '';
 let additionalImagesList = [];
 let pendingDeleteProductId = null;
+let adminOffset = 0;
+let adminTotal = 0;
+let adminStats = { total: 0, published: 0, drafts: 0, featured: 0, best_value: 0 };
+const ADMIN_PAGE_SIZE = 50;
 const PRODUCTS_STORAGE_KEY = 'aifret.products.v1';
 
 const currency = new Intl.NumberFormat('en-IN', {
@@ -103,87 +107,86 @@ async function handleAdminLogout() {
 // Product Data Loading & Filtering
 // ---------------------------------------------------------------------------
 
-async function loadProducts() {
+async function loadProducts(resetPage = false) {
   const tbody = document.querySelector('[data-admin-table-body]');
+  if (resetPage) adminOffset = 0;
+  const query = new URLSearchParams({
+    status: document.querySelector('[data-admin-filter-status]').value,
+    search: document.querySelector('[data-admin-search]').value.trim(),
+    category: document.querySelector('[data-admin-filter-category]').value,
+    marketplace: document.querySelector('[data-admin-filter-market]').value,
+    sort: document.querySelector('[data-admin-sort]').value,
+    limit: String(ADMIN_PAGE_SIZE),
+    offset: String(adminOffset)
+  });
   try {
-    const res = await fetch('/api/products?status=all&limit=500');
+    const res = await fetch(`/api/products?${query}`);
     if (!res.ok) throw new Error('Failed to load products');
     const data = await res.json();
     adminProducts = data.products || [];
+    adminTotal = Number(data.total) || 0;
+    adminStats = data.stats || adminStats;
+    if (Array.isArray(data.categories)) populateFilterDropdowns(data.categories, data.marketplaces || []);
+    if (adminOffset >= adminTotal && adminOffset > 0) {
+      adminOffset = Math.max(0, Math.floor((adminTotal - 1) / ADMIN_PAGE_SIZE) * ADMIN_PAGE_SIZE);
+      return loadProducts();
+    }
     try {
-      window.localStorage.setItem(PRODUCTS_STORAGE_KEY, JSON.stringify(
-        adminProducts.filter((product) => product.status === 'active')
-      ));
-    } catch (error) {}
+      if (adminOffset === 0 && adminTotal <= ADMIN_PAGE_SIZE) {
+        window.localStorage.setItem(PRODUCTS_STORAGE_KEY, JSON.stringify(
+          adminProducts.filter((product) => product.status === 'active')
+        ));
+      }
+    } catch (error) { console.warn('Unable to refresh the local product cache.', error); }
     updateStats();
-    populateFilterDropdowns();
     renderProductTable();
+    updatePagination();
   } catch (err) {
     tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: var(--danger); padding: 24px;">Failed to load products from database: ${err.message}</td></tr>`;
   }
 }
 
 function updateStats() {
-  const total = adminProducts.length;
-  const active = adminProducts.filter(p => p.status === 'active').length;
-  const inactive = adminProducts.filter(p => p.status === 'inactive').length;
-  const featured = adminProducts.filter(p => p.featured === 1 || p.featured === true).length;
-  const best = adminProducts.filter(p => p.best_value === 1 || p.best_value === true).length;
-
-  document.querySelector('[data-stat-total]').textContent = total;
-  document.querySelector('[data-stat-active]').textContent = active;
-  document.querySelector('[data-stat-inactive]').textContent = inactive;
-  document.querySelector('[data-stat-featured]').textContent = featured;
-  document.querySelector('[data-stat-best]').textContent = best;
+  document.querySelector('[data-stat-total]').textContent = adminStats.total;
+  document.querySelector('[data-stat-active]').textContent = adminStats.published;
+  document.querySelector('[data-stat-inactive]').textContent = adminStats.drafts;
+  document.querySelector('[data-stat-featured]').textContent = adminStats.featured;
+  document.querySelector('[data-stat-best]').textContent = adminStats.best_value;
 }
 
-function populateFilterDropdowns() {
+function populateFilterDropdowns(categories = [], marketplaces = []) {
   const categorySelect = document.querySelector('[data-admin-filter-category]');
   const marketSelect = document.querySelector('[data-admin-filter-market]');
+  const categoryOptions = document.querySelector('[data-admin-category-options]');
+  const marketplaceOptions = document.querySelector('[data-admin-marketplace-options]');
 
   const currentCat = categorySelect.value;
   const currentMkt = marketSelect.value;
 
-  const categories = Array.from(new Set(adminProducts.map(p => p.category).filter(Boolean))).sort();
   categorySelect.innerHTML = '<option value="all">All Categories</option>' +
     categories.map(c => `<option value="${escapeHtml(c)}" ${c === currentCat ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('');
 
-  const markets = Array.from(new Set(adminProducts.map(p => p.marketplace).filter(Boolean))).sort();
   marketSelect.innerHTML = '<option value="all">All Marketplaces</option>' +
-    markets.map(m => `<option value="${escapeHtml(m)}" ${m === currentMkt ? 'selected' : ''}>${escapeHtml(m)}</option>`).join('');
+    marketplaces.map(m => `<option value="${escapeHtml(m)}" ${m === currentMkt ? 'selected' : ''}>${escapeHtml(m)}</option>`).join('');
+  categoryOptions.innerHTML = Array.from(new Set(categories)).map(category =>
+    `<option value="${escapeHtml(category)}"></option>`
+  ).join('');
+  marketplaceOptions.innerHTML = Array.from(new Set([...MARKETPLACES, ...marketplaces])).map(marketplace =>
+    `<option value="${escapeHtml(marketplace)}"></option>`
+  ).join('');
 }
 
 function getFilteredProducts() {
-  const searchVal = (document.querySelector('[data-admin-search]').value || '').toLowerCase().trim();
-  const statusVal = document.querySelector('[data-admin-filter-status]').value;
-  const catVal = document.querySelector('[data-admin-filter-category]').value;
-  const mktVal = document.querySelector('[data-admin-filter-market]').value;
-  const sortVal = document.querySelector('[data-admin-sort]').value;
+  return adminProducts;
+}
 
-  let list = adminProducts.filter(p => {
-    if (statusVal === 'active' && p.status !== 'active') return false;
-    if (statusVal === 'inactive' && p.status !== 'inactive') return false;
-    if (catVal !== 'all' && (p.category || '').toLowerCase() !== catVal.toLowerCase()) return false;
-    if (mktVal !== 'all' && (p.marketplace || '').toLowerCase() !== mktVal.toLowerCase()) return false;
-
-    if (searchVal) {
-      const matchText = `${p.name} ${p.brand} ${p.category} ${p.subcategory || ''} ${p.marketplace}`.toLowerCase();
-      if (!matchText.includes(searchVal)) return false;
-    }
-    return true;
-  });
-
-  list.sort((a, b) => {
-    if (sortVal === 'name') return (a.name || '').localeCompare(b.name || '');
-    if (sortVal === 'price-asc') return (a.selling_price || 0) - (b.selling_price || 0);
-    if (sortVal === 'price-desc') return (b.selling_price || 0) - (a.selling_price || 0);
-    if (sortVal === 'discount') return (b.discount || 0) - (a.discount || 0);
-    if (sortVal === 'rating') return (b.rating || 0) - (a.rating || 0);
-    // newest default
-    return new Date(b.created_at || 0) - new Date(a.created_at || 0);
-  });
-
-  return list;
+function updatePagination() {
+  const first = adminTotal ? adminOffset + 1 : 0;
+  const last = Math.min(adminOffset + ADMIN_PAGE_SIZE, adminTotal);
+  document.querySelector('[data-admin-page-info]').textContent =
+    `${first}-${last} of ${adminTotal} products`;
+  document.querySelector('[data-admin-page-prev]').disabled = adminOffset === 0;
+  document.querySelector('[data-admin-page-next]').disabled = adminOffset + ADMIN_PAGE_SIZE >= adminTotal;
 }
 
 function renderProductTable() {
@@ -210,7 +213,7 @@ function renderProductTable() {
         <td>
           <strong>${escapeHtml(p.name)}</strong>
           ${p.subcategory ? `<small style="display:block; color: var(--muted); font-size: 0.76rem;">${escapeHtml(p.subcategory)}</small>` : ''}
-          <small style="color: var(--muted); font-size: 0.74rem;">ID: ${escapeHtml(p.id)}</small>
+          <small style="color: var(--muted); font-size: 0.74rem;">${escapeHtml(p.product_code || p.id)}</small>
         </td>
         <td>${escapeHtml(p.brand)}</td>
         <td><span class="product-tag" style="font-size: 0.72rem;">${escapeHtml(p.category)}</span></td>
@@ -225,7 +228,7 @@ function renderProductTable() {
         </td>
         <td>
           <span class="admin-pill ${isActive ? 'active' : 'inactive'}">
-            ${isActive ? 'Active' : 'Inactive'}
+            ${isActive ? 'Published' : 'Draft'}
           </span>
         </td>
         <td>
@@ -237,8 +240,8 @@ function renderProductTable() {
         <td>
           <div class="admin-actions-cell">
             <button type="button" class="btn btn-secondary btn-small" data-action="edit" data-id="${escapeHtml(p.id)}" title="Edit product details">Edit</button>
-            <button type="button" class="btn btn-small ${isActive ? 'btn-toggle-inactive' : 'btn-toggle-active'}" data-action="toggle-status" data-id="${escapeHtml(p.id)}" title="${isActive ? 'Deactivate product' : 'Activate product'}">
-              ${isActive ? 'Deactivate' : 'Activate'}
+            <button type="button" class="btn btn-small ${isActive ? 'btn-toggle-inactive' : 'btn-toggle-active'}" data-action="toggle-status" data-id="${escapeHtml(p.id)}" title="${isActive ? 'Unpublish product' : 'Publish product'}">
+              ${isActive ? 'Unpublish' : 'Publish'}
             </button>
             <button type="button" class="btn btn-small btn-toggle-featured" data-action="toggle-featured" data-id="${escapeHtml(p.id)}" title="Toggle featured status">
               ${isFeatured ? '★ Unfeature' : '☆ Feature'}
@@ -285,6 +288,7 @@ function createOfferRow(offer = {}) {
   const mrp = offer.mrp ?? '';
   const disc = offer.discount ? `${offer.discount}% OFF` : '';
   const url = offer.product_url || offer.url || '';
+  const affiliateUrl = offer.affiliate_url || '';
   const avail = offer.availability || 'In Stock';
   const storeName = offer.store_name || offer.storeName || '';
 
@@ -296,9 +300,7 @@ function createOfferRow(offer = {}) {
       </div>
       <div class="admin-offer-fields">
         <label>Marketplace
-          <select data-offer-marketplace>
-            ${MARKETPLACES.map(m => `<option value="${m}" ${m === selectedMarket ? 'selected' : ''}>${m}</option>`).join('')}
-          </select>
+          <input type="text" data-offer-marketplace list="admin-marketplace-options" value="${escapeHtml(selectedMarket)}" required />
         </label>
         <label>Store Name (Optional)
           <input type="text" data-offer-store-name value="${escapeHtml(storeName)}" placeholder="e.g. Official Seller" />
@@ -311,6 +313,9 @@ function createOfferRow(offer = {}) {
         </label>
         <label class="admin-full">Product Deal URL *
           <input type="url" data-offer-url value="${escapeHtml(url)}" placeholder="https://www.store.com/item" required />
+        </label>
+        <label class="admin-full">Affiliate URL
+          <input type="url" data-offer-affiliate-url value="${escapeHtml(affiliateUrl)}" placeholder="Optional tracking-enabled URL" />
         </label>
         <label>Availability
           <input type="text" data-offer-avail value="${escapeHtml(avail)}" placeholder="In Stock" />
@@ -338,6 +343,7 @@ function collectOffers() {
       mrp: mrp,
       discount: disc,
       product_url: row.querySelector('[data-offer-url]').value.trim(),
+      affiliate_url: row.querySelector('[data-offer-affiliate-url]').value.trim(),
       availability: row.querySelector('[data-offer-avail]').value.trim() || 'In Stock'
     };
   }).filter(o => o.product_url && o.price > 0);
@@ -378,6 +384,12 @@ function setupImageHandlers() {
   mainFileInput.addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      statusEl.textContent = 'Choose a JPEG, PNG, or WebP image.';
+      statusEl.style.color = 'var(--danger)';
+      e.target.value = '';
+      return;
+    }
     if (file.size > 10 * 1024 * 1024) {
       statusEl.textContent = 'Image file exceeds 10 MB limit.';
       statusEl.style.color = 'var(--danger)';
@@ -421,18 +433,25 @@ function setupImageHandlers() {
     if (!files.length) return;
     statusEl.textContent = `Uploading ${files.length} additional image(s)...`;
 
+    const failures = [];
     for (const file of files) {
+      if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 10 * 1024 * 1024) {
+        failures.push(`${file.name}: use a JPEG, PNG, or WebP file smaller than 10 MB`);
+        continue;
+      }
       try {
         const url = await uploadFileToServer(file);
         additionalImagesList.push(url);
       } catch (err) {
-        console.error('Error uploading extra image:', err);
+        failures.push(`${file.name}: ${err.message}`);
       }
     }
     extraUrlsInput.value = additionalImagesList.join(', ');
     renderExtraPreviews();
-    statusEl.textContent = 'Additional images uploaded!';
-    statusEl.style.color = 'var(--success)';
+    statusEl.textContent = failures.length
+      ? `Some images could not be uploaded: ${failures.join('; ')}`
+      : 'Additional images uploaded!';
+    statusEl.style.color = failures.length ? 'var(--danger)' : 'var(--success)';
   });
 
   extraUrlsInput.addEventListener('input', () => {
@@ -468,6 +487,10 @@ function populateFormForEdit(product) {
   form.elements.selling_price.value = product.selling_price || '';
   form.elements.discount.value = product.discount ?? 0;
   form.elements.product_url.value = product.product_url || '';
+  const primaryOffer = (product.offers || []).find((offer) =>
+    (offer.marketplace || '').toLowerCase() === (product.marketplace || '').toLowerCase()
+  );
+  form.elements.affiliate_url.value = primaryOffer?.affiliate_url || '';
   form.elements.imageUrl.value = product.image || '';
   form.elements.description.value = product.description || '';
   form.elements.rating.value = product.rating ?? 4.5;
@@ -494,7 +517,7 @@ function populateFormForEdit(product) {
   updateDiscountCalculation();
 
   // Offers (exclude primary if duplicated)
-  const offers = (product.offers || product.comparison || []).filter(o => o.marketplace.toLowerCase() !== (product.marketplace || '').toLowerCase());
+  const offers = (product.offers || product.comparison || []).filter(o => (o.marketplace || '').toLowerCase() !== (product.marketplace || '').toLowerCase());
   renderOffersList(offers);
 
   document.querySelector('[data-admin-form-title]').textContent = `Edit Product: ${product.name}`;
@@ -513,6 +536,7 @@ function resetProductForm() {
   form.reset();
   form.elements.id.readOnly = false;
   form.elements.discount.value = '';
+  form.elements.status.value = 'inactive';
   document.querySelector('[data-admin-image-preview]').hidden = true;
   document.querySelector('[data-admin-extra-preview]').innerHTML = '';
   renderOffersList([]);
@@ -548,13 +572,13 @@ async function handleProductSubmit(event) {
   const review_count = parseInt(form.elements.review_count.value) || 0;
   const availability = form.elements.availability.value.trim() || 'In Stock';
   const stock_status = form.elements.stock_status.value;
-  const status = form.elements.status.value;
   const featured = form.elements.featured.checked ? 1 : 0;
   const best_value = form.elements.best_value.checked ? 1 : 0;
   const id = form.elements.id.value.trim();
 
   // Validation
-  if (!name || !category || !marketplace || !product_url || !imageUrl || !description) {
+  const status = form.elements.status.value;
+  if (!name || !brand || !category || !description || !marketplace || !product_url || (status === 'active' && !imageUrl)) {
     statusEl.textContent = 'Please fill out all required fields marked with *.';
     statusEl.style.color = 'var(--danger)';
     return;
@@ -579,6 +603,7 @@ async function handleProductSubmit(event) {
     mrp,
     selling_price,
     product_url,
+    affiliate_url: form.elements.affiliate_url.value.trim(),
     image: imageUrl,
     additional_images: additionalImagesList,
     description,
@@ -613,7 +638,7 @@ async function handleProductSubmit(event) {
       statusEl.textContent = editingProductId ? 'Product updated successfully!' : 'Product added successfully!';
       statusEl.style.color = 'var(--success)';
       resetProductForm();
-      await loadProducts();
+      await loadProducts(true);
     } else {
       statusEl.textContent = data.message || 'Error saving product.';
       statusEl.style.color = 'var(--danger)';
@@ -635,29 +660,41 @@ async function handleTableActions(event) {
   const action = btn.dataset.action;
   const productId = btn.dataset.id;
   const product = adminProducts.find(p => p.id === productId);
+  const statusEl = document.querySelector('[data-admin-status]');
 
   if (action === 'edit' && product) {
     populateFormForEdit(product);
   } else if (action === 'toggle-status') {
     try {
       const res = await fetch(`/api/products/${encodeURIComponent(productId)}/status`, { method: 'PATCH' });
-      if (res.ok) await loadProducts();
-    } catch (e) {
-      console.error(e);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Unable to update publication status.');
+      statusEl.textContent = data.value === 'active' ? 'Product published.' : 'Product saved as a draft.';
+      statusEl.style.color = 'var(--success)';
+      await loadProducts();
+    } catch (error) {
+      statusEl.textContent = error.message;
+      statusEl.style.color = 'var(--danger)';
     }
   } else if (action === 'toggle-featured') {
     try {
       const res = await fetch(`/api/products/${encodeURIComponent(productId)}/featured`, { method: 'PATCH' });
-      if (res.ok) await loadProducts();
-    } catch (e) {
-      console.error(e);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Unable to update featured status.');
+      await loadProducts();
+    } catch (error) {
+      statusEl.textContent = error.message;
+      statusEl.style.color = 'var(--danger)';
     }
   } else if (action === 'toggle-best') {
     try {
       const res = await fetch(`/api/products/${encodeURIComponent(productId)}/best-value`, { method: 'PATCH' });
-      if (res.ok) await loadProducts();
-    } catch (e) {
-      console.error(e);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Unable to update best-value status.');
+      await loadProducts();
+    } catch (error) {
+      statusEl.textContent = error.message;
+      statusEl.style.color = 'var(--danger)';
     }
   } else if (action === 'delete') {
     openDeleteModal(productId, product ? product.name : 'this product');
@@ -693,9 +730,14 @@ async function performDelete(permanent = false) {
     if (res.ok) {
       await loadProducts();
       if (editingProductId === id) resetProductForm();
+    } else {
+      const data = await res.json();
+      throw new Error(data.message || 'Unable to delete this product.');
     }
   } catch (err) {
-    alert(`Error deleting product: ${err.message}`);
+    const statusEl = document.querySelector('[data-admin-status]');
+    statusEl.textContent = `Error deleting product: ${err.message}`;
+    statusEl.style.color = 'var(--danger)';
   }
 }
 
@@ -712,6 +754,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Logout button
   document.querySelector('[data-admin-logout-btn]').addEventListener('click', handleAdminLogout);
+  document.querySelector('[data-admin-add-product]').addEventListener('click', () => {
+    resetProductForm();
+    document.getElementById('product-form-panel').scrollIntoView({ behavior: 'smooth' });
+    document.querySelector('[data-admin-form] [name="name"]').focus({ preventScroll: true });
+  });
 
   // Discount calculation listeners
   document.querySelector('[data-calc-mrp]').addEventListener('input', updateDiscountCalculation);
@@ -743,11 +790,23 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelector('[data-admin-table-body]').addEventListener('click', handleTableActions);
 
   // Filters and search
-  document.querySelector('[data-admin-search]').addEventListener('input', renderProductTable);
-  document.querySelector('[data-admin-filter-status]').addEventListener('change', renderProductTable);
-  document.querySelector('[data-admin-filter-category]').addEventListener('change', renderProductTable);
-  document.querySelector('[data-admin-filter-market]').addEventListener('change', renderProductTable);
-  document.querySelector('[data-admin-sort]').addEventListener('change', renderProductTable);
+  let searchTimer;
+  document.querySelector('[data-admin-search]').addEventListener('input', () => {
+    window.clearTimeout(searchTimer);
+    searchTimer = window.setTimeout(() => loadProducts(true), 250);
+  });
+  document.querySelector('[data-admin-filter-status]').addEventListener('change', () => loadProducts(true));
+  document.querySelector('[data-admin-filter-category]').addEventListener('change', () => loadProducts(true));
+  document.querySelector('[data-admin-filter-market]').addEventListener('change', () => loadProducts(true));
+  document.querySelector('[data-admin-sort]').addEventListener('change', () => loadProducts(true));
+  document.querySelector('[data-admin-page-prev]').addEventListener('click', () => {
+    adminOffset = Math.max(0, adminOffset - ADMIN_PAGE_SIZE);
+    loadProducts();
+  });
+  document.querySelector('[data-admin-page-next]').addEventListener('click', () => {
+    adminOffset += ADMIN_PAGE_SIZE;
+    loadProducts();
+  });
 
   // Delete modal buttons
   document.querySelector('[data-delete-cancel]').addEventListener('click', closeDeleteModal);

@@ -19,6 +19,7 @@ import hashlib
 import secrets
 import mimetypes
 import urllib.parse
+import math
 from datetime import datetime, timedelta
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 
@@ -27,6 +28,7 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
 DB_PATH = os.path.join(DATA_DIR, "aifret.db")
 PORT = int(os.environ.get("PORT", 8000))
+COOKIE_SECURE = os.environ.get("AIFRET_COOKIE_SECURE", "false").strip().lower() == "true"
 AI_VIDEO_PROVIDER = os.environ.get("AI_VIDEO_PROVIDER", "mock").strip().lower()
 AI_VIDEO_API_KEY = os.environ.get("AI_VIDEO_API_KEY", "").strip()
 AI_VIDEO_MODEL = os.environ.get("AI_VIDEO_MODEL", "aifret-tryon-mock").strip()
@@ -105,6 +107,76 @@ def verify_password(password: str, hashed: str, salt: str) -> bool:
     check_hash, _ = hash_password(password, salt)
     return secrets.compare_digest(hashed, check_hash)
 
+def validate_web_url(value, field_name, required=True):
+    value = str(value or '').strip()
+    if not value and not required:
+        return ''
+    parsed = urllib.parse.urlparse(value)
+    if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError(f"{field_name} must be a valid HTTP or HTTPS URL")
+    return value
+
+def validate_affiliate_url(value, field_name, product_url):
+    affiliate_url = validate_web_url(value, field_name, required=False)
+    if not affiliate_url:
+        return ''
+    affiliate_host = urllib.parse.urlparse(affiliate_url).hostname.lower().rstrip('.')
+    product_host = urllib.parse.urlparse(product_url).hostname.lower().rstrip('.')
+    allowed_hosts = {
+        host.strip().lower().rstrip('.')
+        for host in os.environ.get("AIFRET_ALLOWED_AFFILIATE_DOMAINS", "").split(",")
+        if host.strip()
+    }
+    if not any(
+        affiliate_host == host or affiliate_host.endswith(f".{host}")
+        for host in {product_host, *allowed_hosts}
+    ):
+        raise ValueError(f"{field_name} must use the product domain or a domain in AIFRET_ALLOWED_AFFILIATE_DOMAINS")
+    return affiliate_url
+
+def validate_image_reference(value):
+    value = str(value or '').strip()
+    if not value:
+        return ''
+    if value.startswith('/uploads/'):
+        filename = value[len('/uploads/'):]
+        if not filename or '/' in filename or '\\' in filename or '..' in filename:
+            raise ValueError("Image path is invalid")
+        return value
+    return validate_web_url(value, "Image URL")
+
+def normalize_product_status(value):
+    if value in ('active', 'published', 1, '1'):
+        return 'active'
+    if value in ('inactive', 'draft', 'unpublished', 0, '0'):
+        return 'inactive'
+    raise ValueError("Select Draft or Published as the product status")
+
+def image_extension(image_bytes):
+    if image_bytes.startswith(b'\xff\xd8\xff'):
+        return 'jpg'
+    if image_bytes.startswith(b'\x89PNG\r\n\x1a\n'):
+        return 'png'
+    if len(image_bytes) >= 12 and image_bytes[:4] == b'RIFF' and image_bytes[8:12] == b'WEBP':
+        return 'webp'
+    return None
+
+def write_audit_log(cursor, admin, action, entity_type, entity_id, details=None):
+    cursor.execute("""
+        INSERT INTO audit_logs (
+            id, admin_user_id, admin_username, action, entity_type, entity_id, details, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        f"audit-{secrets.token_hex(8)}",
+        admin.get('user_id'),
+        admin.get('username', 'Admin'),
+        action,
+        entity_type,
+        str(entity_id),
+        json.dumps(details or {}, ensure_ascii=False),
+        datetime.now().isoformat()
+    ))
+
 def generate_customer_id(cursor):
     cursor.execute("""
         SELECT customer_id FROM customer_users
@@ -129,6 +201,7 @@ def init_database():
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS products (
         id TEXT PRIMARY KEY,
+        product_code TEXT,
         name TEXT NOT NULL,
         brand TEXT NOT NULL,
         category TEXT NOT NULL,
@@ -191,6 +264,20 @@ def init_database():
         created_at TEXT NOT NULL,
         expires_at TEXT NOT NULL,
         FOREIGN KEY (user_id) REFERENCES admin_users(id) ON DELETE CASCADE
+    );
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS audit_logs (
+        id TEXT PRIMARY KEY,
+        admin_user_id TEXT,
+        admin_username TEXT NOT NULL,
+        action TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        details TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (admin_user_id) REFERENCES admin_users(id) ON DELETE SET NULL
     );
     """)
 
@@ -284,6 +371,12 @@ def init_database():
     """)
 
     # Indexes for performance
+    product_columns = {row['name'] for row in cursor.execute("PRAGMA table_info(products)").fetchall()}
+    if 'product_code' not in product_columns:
+        cursor.execute("ALTER TABLE products ADD COLUMN product_code TEXT")
+
+    # Backfill immutable catalogue codes for records created before this migration.
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_products_product_code ON products(product_code);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_products_status ON products(status);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_products_brand ON products(brand);")
@@ -292,6 +385,7 @@ def init_database():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_products_best_value ON products(best_value);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_offers_product_id ON product_offers(product_id);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_offers_marketplace ON product_offers(marketplace);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_users_email ON customer_users(email);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_users_mobile ON customer_users(mobile);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_sessions_user ON customer_sessions(user_id);")
@@ -322,6 +416,17 @@ def init_database():
     cursor.execute("SELECT COUNT(*) FROM products;")
     if cursor.fetchone()[0] == 0:
         seed_initial_catalog(cursor)
+
+    cursor.execute("SELECT id FROM products WHERE product_code IS NULL OR product_code = '' ORDER BY created_at, id")
+    missing_codes = [row['id'] for row in cursor.fetchall()]
+    cursor.execute("SELECT COALESCE(MAX(CAST(SUBSTR(product_code, 13) AS INTEGER)), 0) FROM products WHERE product_code LIKE 'AIFRET-PROD-%'")
+    next_code = cursor.fetchone()[0] + 1
+    for product_id in missing_codes:
+        cursor.execute(
+            "UPDATE products SET product_code = ? WHERE id = ?",
+            (f"AIFRET-PROD-{next_code:06d}", product_id)
+        )
+        next_code += 1
 
     conn.commit()
     conn.close()
@@ -636,6 +741,8 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
             content_length = int(self.headers.get('Content-Length', 0))
             if content_length == 0:
                 return {}
+            if content_length < 0 or content_length > 15 * 1024 * 1024:
+                return None
             raw = self.rfile.read(content_length).decode('utf-8')
             return json.loads(raw) if raw else {}
         except Exception as e:
@@ -757,6 +864,14 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
                 self.send_json({"authenticated": False}, status=401)
             return
 
+        if path == '/api/admin/audit-logs':
+            admin = self.authenticate_admin()
+            if not admin:
+                self.send_error_json("Unauthorized", status=401)
+                return
+            self.handle_get_audit_logs(query)
+            return
+
         # 6. Customer Session Check: /session
         if path in ['/session', '/api/customer/session']:
             customer = self.authenticate_customer()
@@ -828,8 +943,12 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
         featured = query.get('featured', [''])[0].strip()
         best_value = query.get('best_value', [''])[0].strip()
         status = query.get('status', ['active'])[0].strip()
-        limit = int(query.get('limit', [100])[0])
-        offset = int(query.get('offset', [0])[0])
+        try:
+            limit = max(1, min(100, int(query.get('limit', [50])[0])))
+            offset = max(0, int(query.get('offset', [0])[0]))
+        except (TypeError, ValueError):
+            self.send_error_json("Invalid pagination values")
+            return
 
         conn = get_db()
         cursor = conn.cursor()
@@ -947,14 +1066,31 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
             prod['comparison'] = prod['offers']  # Backward compatibility alias
             products.append(prod)
 
-        conn.close()
-        self.send_json({
+        response = {
             "products": products,
             "total": total_count,
             "count": len(products),
             "limit": limit,
             "offset": offset
-        })
+        }
+        if admin:
+            cursor.execute("""
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS published,
+                    SUM(CASE WHEN status = 'inactive' THEN 1 ELSE 0 END) AS drafts,
+                    SUM(CASE WHEN featured = 1 THEN 1 ELSE 0 END) AS featured,
+                    SUM(CASE WHEN best_value = 1 THEN 1 ELSE 0 END) AS best_value
+                FROM products
+            """)
+            stat_row = cursor.fetchone()
+            response['stats'] = {key: stat_row[key] or 0 for key in ('total', 'published', 'drafts', 'featured', 'best_value')}
+            cursor.execute("SELECT DISTINCT category FROM products WHERE category != '' ORDER BY category COLLATE NOCASE")
+            response['categories'] = [row['category'] for row in cursor.fetchall()]
+            cursor.execute("SELECT DISTINCT marketplace FROM product_offers WHERE marketplace != '' ORDER BY marketplace COLLATE NOCASE")
+            response['marketplaces'] = [row['marketplace'] for row in cursor.fetchall()]
+        conn.close()
+        self.send_json(response)
 
     def handle_get_product_by_id(self, product_id):
         conn = get_db()
@@ -967,6 +1103,10 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
             return
 
         prod = dict(row)
+        if prod.get('status') != 'active' and not self.authenticate_admin():
+            conn.close()
+            self.send_error_json("Product not found", status=404)
+            return
         try:
             prod['additional_images'] = json.loads(prod['additional_images'] or '[]')
         except Exception:
@@ -982,6 +1122,28 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
 
         conn.close()
         self.send_json({"product": prod})
+
+    def handle_get_audit_logs(self, query):
+        try:
+            limit = max(1, min(100, int(query.get('limit', [50])[0])))
+            offset = max(0, int(query.get('offset', [0])[0]))
+        except (TypeError, ValueError):
+            self.send_error_json("Invalid pagination values")
+            return
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, admin_username, action, entity_type, entity_id, details, created_at
+            FROM audit_logs ORDER BY created_at DESC LIMIT ? OFFSET ?
+        """, (limit, offset))
+        logs = [dict(row) for row in cursor.fetchall()]
+        for log in logs:
+            try:
+                log['details'] = json.loads(log['details'] or '{}')
+            except (TypeError, json.JSONDecodeError):
+                log['details'] = {}
+        conn.close()
+        self.send_json({"logs": logs, "limit": limit, "offset": offset})
 
     def handle_get_marketplaces(self):
         conn = get_db()
@@ -1113,9 +1275,10 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
         conn.commit()
         conn.close()
 
-        cookie_val = f"aifret_session={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800"
+        secure_attribute = "; Secure" if COOKIE_SECURE else ""
+        cookie_val = f"aifret_session={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800{secure_attribute}"
         self.send_json(
-            {"success": True, "token": token, "username": user['username']},
+            {"success": True, "username": user['username']},
             headers={"Set-Cookie": cookie_val}
         )
 
@@ -1128,7 +1291,8 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
             conn.commit()
             conn.close()
 
-        expired_cookie = "aifret_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
+        secure_attribute = "; Secure" if COOKIE_SECURE else ""
+        expired_cookie = f"aifret_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{secure_attribute}"
         self.send_json({"success": True}, headers={"Set-Cookie": expired_cookie})
 
     def handle_customer_signup(self):
@@ -1174,7 +1338,8 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
         conn.close()
 
         customer = {"id": user_id, "customerId": customer_id, "fullName": full_name, "email": email, "mobile": mobile, "status": "active"}
-        cookie_val = "aifret_customer_session={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000".format(token)
+        secure_attribute = "; Secure" if COOKIE_SECURE else ""
+        cookie_val = "aifret_customer_session={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000{}".format(token, secure_attribute)
         self.send_json({"success": True, "token": token, "user": customer}, headers={"Set-Cookie": cookie_val})
 
     def handle_customer_login(self):
@@ -1212,7 +1377,8 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
         conn.close()
 
         customer = {"id": user['id'], "customerId": user['customer_id'], "fullName": user['full_name'], "email": user['email'], "mobile": user['mobile'], "status": user['status']}
-        cookie_val = "aifret_customer_session={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000".format(token)
+        secure_attribute = "; Secure" if COOKIE_SECURE else ""
+        cookie_val = "aifret_customer_session={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000{}".format(token, secure_attribute)
         self.send_json({"success": True, "token": token, "user": customer}, headers={"Set-Cookie": cookie_val})
 
     def handle_customer_logout(self):
@@ -1223,7 +1389,8 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
             cursor.execute("DELETE FROM customer_sessions WHERE token = ?", (token,))
             conn.commit()
             conn.close()
-        expired_cookie = "aifret_customer_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
+        secure_attribute = "; Secure" if COOKIE_SECURE else ""
+        expired_cookie = f"aifret_customer_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{secure_attribute}"
         self.send_json({"success": True}, headers={"Set-Cookie": expired_cookie})
 
     def handle_customer_forgot_password(self):
@@ -1505,6 +1672,14 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
             return
 
         content_type = self.headers.get('Content-Type', '')
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+        except ValueError:
+            self.send_error_json("Invalid upload size")
+            return
+        if content_length <= 0 or content_length > 15 * 1024 * 1024:
+            self.send_error_json("Image upload must be smaller than 10 MB")
+            return
 
         # Option A: JSON with Base64 payload
         if 'application/json' in content_type:
@@ -1514,33 +1689,40 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
                 return
 
             raw_data = body['data']
+            if not isinstance(raw_data, str):
+                self.send_error_json("Invalid image data")
+                return
             # Expected format: data:image/png;base64,...
             if ',' in raw_data:
                 header, base64_str = raw_data.split(',', 1)
-                ext = 'jpg'
-                if 'image/png' in header: ext = 'png'
-                elif 'image/webp' in header: ext = 'webp'
-                elif 'image/gif' in header: ext = 'gif'
-                elif 'image/jpeg' in header: ext = 'jpg'
+                if header not in ('data:image/jpeg;base64', 'data:image/png;base64', 'data:image/webp;base64'):
+                    self.send_error_json("Only JPEG, PNG, and WebP images are allowed")
+                    return
             else:
                 base64_str = raw_data
-                ext = 'jpg'
 
-            import base64
             try:
-                img_bytes = base64.b64decode(base64_str)
-            except Exception:
+                img_bytes = base64.b64decode(base64_str, validate=True)
+            except (ValueError, base64.binascii.Error):
                 self.send_error_json("Invalid base64 encoding")
                 return
 
             if len(img_bytes) > 10 * 1024 * 1024:
                 self.send_error_json("Image exceeds 10 MB limit")
                 return
+            ext = image_extension(img_bytes)
+            if not ext:
+                self.send_error_json("Image content must be a valid JPEG, PNG, or WebP file")
+                return
 
             filename = f"img_{datetime.now().strftime('%Y%m%d%H%M%S')}_{secrets.token_hex(4)}.{ext}"
             filepath = os.path.join(UPLOADS_DIR, filename)
-            with open(filepath, 'wb') as f:
-                f.write(img_bytes)
+            try:
+                with open(filepath, 'xb') as f:
+                    f.write(img_bytes)
+            except OSError:
+                self.send_error_json("Unable to store the uploaded image", status=500)
+                return
 
             url = f"/uploads/{filename}"
             self.send_json({"success": True, "url": url, "filename": filename})
@@ -1560,27 +1742,26 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
                     self.send_error_json("No file uploaded")
                     return
 
-                img_bytes = fileitem.file.read()
+                img_bytes = fileitem.file.read(10 * 1024 * 1024 + 1)
                 if len(img_bytes) > 10 * 1024 * 1024:
                     self.send_error_json("File size exceeds 10 MB limit")
                     return
 
-                original_filename = fileitem.filename or "upload.jpg"
-                ext = original_filename.rsplit('.', 1)[-1].lower() if '.' in original_filename else 'jpg'
-                if ext not in ['jpg', 'jpeg', 'png', 'webp', 'gif']:
-                    self.send_error_json("Invalid file format. JPG, PNG, WebP or GIF allowed.")
+                ext = image_extension(img_bytes)
+                if not ext:
+                    self.send_error_json("Image content must be a valid JPEG, PNG, or WebP file")
                     return
 
                 filename = f"img_{datetime.now().strftime('%Y%m%d%H%M%S')}_{secrets.token_hex(4)}.{ext}"
                 filepath = os.path.join(UPLOADS_DIR, filename)
-                with open(filepath, 'wb') as f:
+                with open(filepath, 'xb') as f:
                     f.write(img_bytes)
 
                 url = f"/uploads/{filename}"
                 self.send_json({"success": True, "url": url, "filename": filename})
                 return
-            except Exception as e:
-                self.send_error_json(f"Upload error: {str(e)}")
+            except (OSError, ValueError, KeyError):
+                self.send_error_json("Unable to process the uploaded image", status=400)
                 return
 
         self.send_error_json("Unsupported content type for upload")
@@ -1596,121 +1777,150 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
             self.send_error_json("Invalid JSON body")
             return
 
-        # Validation
-        name = body.get('name', '').strip()
-        brand = body.get('brand', '').strip()
-        category = body.get('category', '').strip()
-        subcategory = body.get('subcategory', '').strip()
-        description = body.get('description', '').strip()
-        image = body.get('image', '').strip()
-        additional_images = body.get('additional_images', [])
-        marketplace = body.get('marketplace', '').strip()
-        product_url = body.get('product_url', '').strip()
-        availability = body.get('availability', 'In Stock').strip()
-        stock_status = body.get('stock_status', 'in_stock').strip()
-        featured = 1 if body.get('featured') in [True, 1, '1', 'true'] else 0
-        best_value = 1 if body.get('best_value') in [True, 1, '1', 'true'] else 0
-        status = 'inactive' if body.get('status') in ['inactive', '0', 0] else 'active'
-
         try:
+            name = str(body.get('name', '')).strip()
+            brand = str(body.get('brand', '')).strip()
+            category = str(body.get('category', '')).strip()
+            subcategory = str(body.get('subcategory', '')).strip()
+            description = str(body.get('description', '')).strip()
+            image = validate_image_reference(body.get('image', ''))
+            additional_images = body.get('additional_images', [])
+            marketplace = str(body.get('marketplace', '')).strip()
+            product_url = validate_web_url(body.get('product_url', ''), "Marketplace product URL")
+            affiliate_url = validate_affiliate_url(body.get('affiliate_url', ''), "Affiliate URL", product_url)
+            availability = str(body.get('availability', 'In Stock')).strip()
+            stock_status = str(body.get('stock_status', 'in_stock')).strip()
+            if stock_status not in ('in_stock', 'limited', 'out_of_stock'):
+                raise ValueError("Select a valid stock status")
+            if stock_status == 'out_of_stock':
+                availability = 'Out of Stock'
+            if not isinstance(additional_images, list) or not all(isinstance(url, str) for url in additional_images):
+                raise ValueError("Additional images must be a list of image URLs")
+            additional_images = [validate_image_reference(url) for url in additional_images]
+            featured = 1 if body.get('featured') in [True, 1, '1', 'true'] else 0
+            best_value = 1 if body.get('best_value') in [True, 1, '1', 'true'] else 0
+            status = normalize_product_status(body.get('status', 'active'))
             mrp = float(body.get('mrp', 0))
             selling_price = float(body.get('selling_price', 0))
-            rating = float(body.get('rating', 4.0))
+            rating = float(body.get('rating', 0))
             review_count = int(body.get('review_count', 0))
-        except (ValueError, TypeError):
-            self.send_error_json("MRP, Selling Price, Rating and Review count must be valid numbers")
+            if not all(math.isfinite(value) for value in (mrp, selling_price, rating)):
+                raise ValueError("Prices and rating must be finite numbers")
+            if not name or not description or not category or not marketplace or not product_url:
+                raise ValueError("Product name, description, category, marketplace, and product URL are required")
+            if status == 'active' and not image:
+                raise ValueError("A product image is required before publishing")
+            if mrp <= 0 or selling_price <= 0 or rating < 0 or rating > 5 or review_count < 0:
+                raise ValueError("Enter positive prices, a rating from 0 to 5, and a non-negative review count")
+            offers = body.get('offers', body.get('comparison', []))
+            if not isinstance(offers, list):
+                raise ValueError("Marketplace offers must be a list")
+            validated_offers = []
+            for offer in offers:
+                if not isinstance(offer, dict):
+                    raise ValueError("Each marketplace offer must be an object")
+                off_market = str(offer.get('marketplace', '')).strip()
+                if not off_market or off_market.lower() == marketplace.lower():
+                    continue
+                off_price = float(offer.get('price', 0))
+                off_mrp = float(offer.get('mrp', 0) or 0)
+                if not math.isfinite(off_price) or not math.isfinite(off_mrp) or off_price <= 0 or off_mrp < 0:
+                    raise ValueError(f"Enter valid prices for the {off_market} offer")
+                off_url = validate_web_url(offer.get('product_url', ''), f"{off_market} product URL")
+                validated_offers.append({
+                    'marketplace': off_market,
+                    'store_name': str(offer.get('store_name', '')).strip(),
+                    'price': off_price,
+                    'mrp': off_mrp,
+                    'product_url': off_url,
+                    'affiliate_url': validate_affiliate_url(offer.get('affiliate_url', ''), f"{off_market} affiliate URL", off_url),
+                    'availability': str(offer.get('availability', availability)).strip() or availability
+                })
+        except (TypeError, ValueError, OverflowError) as error:
+            self.send_error_json(str(error))
             return
 
-        if not name or not category or not marketplace or not product_url:
-            self.send_error_json("Product Name, Category, Marketplace, and Product URL are required")
-            return
-
-        if mrp < 0 or selling_price < 0:
-            self.send_error_json("Price cannot be negative")
-            return
-
-        if not (product_url.startswith('http://') or product_url.startswith('https://') or product_url.startswith('#')):
-            self.send_error_json("Product URL must be a valid web URL")
-            return
-
-        # Auto-calculate discount
-        if mrp > 0 and selling_price <= mrp:
-            discount = round(((mrp - selling_price) / mrp) * 100)
-        else:
-            discount = 0
-
-        # Custom ID or auto-generated slug
-        product_id = body.get('id', '').strip()
+        discount = round(((mrp - selling_price) / mrp) * 100) if mrp > 0 and selling_price <= mrp else 0
+        product_id = str(body.get('id', '') or '').strip()
         if not product_id:
             base_slug = name.lower().replace(" ", "-")
-            clean_slug = "".join(c for c in base_slug if c.isalnum() or c == '-')
-            product_id = f"{clean_slug}-{secrets.token_hex(3)}"
+            clean_slug = "".join(c for c in base_slug if c.isalnum() or c == '-').strip('-')
+            product_id = f"{clean_slug or 'product'}-{secrets.token_hex(3)}"
+        if len(product_id) > 120 or not all(c.isalnum() or c in '-_' for c in product_id):
+            self.send_error_json("Product ID may contain only letters, numbers, hyphens, and underscores")
+            return
 
         now = datetime.now().isoformat()
         conn = get_db()
         cursor = conn.cursor()
-
-        # Check existing ID
-        cursor.execute("SELECT id FROM products WHERE id = ?", (product_id,))
-        if cursor.fetchone():
-            product_id = f"{product_id}-{secrets.token_hex(2)}"
-
-        cursor.execute("""
-            INSERT INTO products (
-                id, name, brand, category, subcategory, description, image, additional_images,
-                mrp, selling_price, discount, marketplace, product_url, rating, review_count,
-                availability, stock_status, featured, best_value, status, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            product_id, name, brand, category, subcategory, description, image,
-            json.dumps(additional_images), mrp, selling_price, discount, marketplace,
-            product_url, rating, review_count, availability, stock_status,
-            featured, best_value, status, now, now
-        ))
-
-        # Insert primary marketplace offer
-        primary_offer_id = f"offer-{secrets.token_hex(6)}"
-        cursor.execute("""
-            INSERT INTO product_offers (
-                id, product_id, marketplace, marketplace_slug, store_name, price, mrp,
-                discount, product_url, affiliate_url, availability, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            primary_offer_id, product_id, marketplace,
-            marketplace.lower().replace(" ", "-"), "",
-            selling_price, mrp, discount, product_url,
-            body.get('affiliate_url', ''), availability, now
-        ))
-
-        # Insert any additional marketplace offers
-        offers = body.get('offers', body.get('comparison', []))
-        for offer in offers:
-            off_market = offer.get('marketplace', '').strip()
-            if not off_market or off_market.lower() == marketplace.lower():
-                continue
-            off_price = float(offer.get('price', selling_price))
-            off_mrp = float(offer.get('mrp', mrp))
-            off_url = offer.get('product_url', offer.get('url', product_url)).strip()
-            off_disc = round(((off_mrp - off_price) / off_mrp) * 100) if off_mrp > 0 else 0
-            off_avail = offer.get('availability', availability)
-            off_id = f"offer-{secrets.token_hex(6)}"
-
+        try:
+            cursor.execute("BEGIN IMMEDIATE")
+            cursor.execute("SELECT 1 FROM products WHERE id = ?", (product_id,))
+            if cursor.fetchone():
+                conn.rollback()
+                conn.close()
+                self.send_error_json("This product ID is already in use", status=409)
+                return
+            cursor.execute("SELECT COALESCE(MAX(CAST(SUBSTR(product_code, 13) AS INTEGER)), 0) + 1 FROM products WHERE product_code LIKE 'AIFRET-PROD-%'")
+            product_code = f"AIFRET-PROD-{cursor.fetchone()[0]:06d}"
             cursor.execute("""
-                INSERT INTO product_offers (
-                    id, product_id, marketplace, marketplace_slug, store_name, price, mrp,
-                    discount, product_url, affiliate_url, availability, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO products (
+                    id, product_code, name, brand, category, subcategory, description, image, additional_images,
+                    mrp, selling_price, discount, marketplace, product_url, rating, review_count,
+                    availability, stock_status, featured, best_value, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                off_id, product_id, off_market,
-                off_market.lower().replace(" ", "-"),
-                offer.get('store_name', ''), off_price, off_mrp, off_disc,
-                off_url, offer.get('affiliate_url', ''), off_avail, now
+                product_id, product_code, name, brand, category, subcategory, description, image,
+                json.dumps(additional_images), mrp, selling_price, discount, marketplace,
+                product_url, rating, review_count, availability, stock_status,
+                featured, best_value, status, now, now
             ))
 
-        conn.commit()
+            offer_rows = [{
+                'marketplace': marketplace,
+                'store_name': '',
+                'price': selling_price,
+                'mrp': mrp,
+                'product_url': product_url,
+                'affiliate_url': affiliate_url,
+                'availability': availability
+            }] + validated_offers
+            for offer in offer_rows:
+                off_mrp = offer['mrp']
+                off_price = offer['price']
+                off_disc = round(((off_mrp - off_price) / off_mrp) * 100) if off_mrp > 0 and off_price <= off_mrp else 0
+                cursor.execute("""
+                    INSERT INTO product_offers (
+                        id, product_id, marketplace, marketplace_slug, store_name, price, mrp,
+                        discount, product_url, affiliate_url, availability, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    f"offer-{secrets.token_hex(6)}", product_id, offer['marketplace'],
+                    offer['marketplace'].lower().replace(" ", "-"), offer['store_name'],
+                    off_price, off_mrp, off_disc, offer['product_url'], offer['affiliate_url'],
+                    offer['availability'], now
+                ))
+            write_audit_log(cursor, admin, "create", "product", product_id, {"product_code": product_code, "status": status})
+            conn.commit()
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            conn.close()
+            self.send_error_json("Product could not be saved because a unique value already exists", status=409)
+            return
+        except sqlite3.Error:
+            conn.rollback()
+            conn.close()
+            self.send_error_json("Product could not be saved. Please try again.", status=500)
+            return
         conn.close()
 
-        self.send_json({"success": True, "id": product_id, "message": "Product created successfully"}, status=201)
+        self.send_json({
+            "success": True,
+            "id": product_id,
+            "product_code": product_code,
+            "status": status,
+            "message": "Product created successfully"
+        }, status=201)
 
     # -----------------------------------------------------------------------
     # PUT Handlers
@@ -1744,99 +1954,140 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
 
         conn = get_db()
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM products WHERE id = ?", (product_id,))
-        existing = cursor.fetchone()
-        if not existing:
+        try:
+            cursor.execute("BEGIN IMMEDIATE")
+            cursor.execute("SELECT * FROM products WHERE id = ?", (product_id,))
+            existing = cursor.fetchone()
+            if not existing:
+                conn.rollback()
+                conn.close()
+                self.send_error_json("Product not found", status=404)
+                return
+            cursor.execute("""
+                SELECT affiliate_url FROM product_offers
+                WHERE product_id = ? AND LOWER(marketplace) = LOWER(?)
+                ORDER BY updated_at DESC LIMIT 1
+            """, (product_id, existing['marketplace']))
+            primary_offer = cursor.fetchone()
+            existing_affiliate_url = primary_offer['affiliate_url'] if primary_offer else ''
+
+            name = str(body.get('name', existing['name']) or '').strip()
+            brand = str(body.get('brand', existing['brand']) or '').strip()
+            category = str(body.get('category', existing['category']) or '').strip()
+            subcategory = str(body.get('subcategory', existing['subcategory']) or '').strip()
+            description = str(body.get('description', existing['description']) or '').strip()
+            image = validate_image_reference(body.get('image', existing['image']))
+            additional_images = body.get('additional_images', json.loads(existing['additional_images'] or '[]'))
+            if not isinstance(additional_images, list) or not all(isinstance(url, str) for url in additional_images):
+                raise ValueError("Additional images must be a list of image URLs")
+            additional_images = [validate_image_reference(url) for url in additional_images]
+            marketplace = str(body.get('marketplace', existing['marketplace']) or '').strip()
+            product_url = validate_web_url(body.get('product_url', existing['product_url']), "Marketplace product URL")
+            affiliate_url = validate_affiliate_url(body.get('affiliate_url', existing_affiliate_url), "Affiliate URL", product_url)
+            availability = str(body.get('availability', existing['availability']) or '').strip()
+            stock_status = str(body.get('stock_status', existing['stock_status']) or '').strip()
+            if stock_status not in ('in_stock', 'limited', 'out_of_stock'):
+                raise ValueError("Select a valid stock status")
+            if stock_status == 'out_of_stock':
+                availability = 'Out of Stock'
+            featured = 1 if body.get('featured', existing['featured']) in [True, 1, '1', 'true'] else 0
+            best_value = 1 if body.get('best_value', existing['best_value']) in [True, 1, '1', 'true'] else 0
+            status = normalize_product_status(body.get('status', existing['status']))
+            mrp = float(body.get('mrp', existing['mrp']))
+            selling_price = float(body.get('selling_price', existing['selling_price']))
+            rating = float(body.get('rating', existing['rating']))
+            review_count = int(body.get('review_count', existing['review_count']))
+            if not all(math.isfinite(value) for value in (mrp, selling_price, rating)):
+                raise ValueError("Prices and rating must be finite numbers")
+            if not name or not description or not category or not marketplace or mrp <= 0 or selling_price <= 0:
+                raise ValueError("Name, description, category, marketplace, and positive prices are required")
+            if status == 'active' and not image:
+                raise ValueError("A product image is required before publishing")
+            if rating < 0 or rating > 5 or review_count < 0:
+                raise ValueError("Enter a rating from 0 to 5 and a non-negative review count")
+
+            discount = round(((mrp - selling_price) / mrp) * 100) if selling_price <= mrp else 0
+            offers = body.get('offers', body.get('comparison'))
+            validated_offers = None
+            if offers is not None:
+                if not isinstance(offers, list):
+                    raise ValueError("Marketplace offers must be a list")
+                validated_offers = []
+                for offer in offers:
+                    if not isinstance(offer, dict):
+                        raise ValueError("Each marketplace offer must be an object")
+                    off_market = str(offer.get('marketplace', '')).strip()
+                    if not off_market or off_market.lower() == marketplace.lower():
+                        continue
+                    off_price = float(offer.get('price', 0))
+                    off_mrp = float(offer.get('mrp', 0) or 0)
+                    if not math.isfinite(off_price) or not math.isfinite(off_mrp) or off_price <= 0 or off_mrp < 0:
+                        raise ValueError(f"Enter valid prices for the {off_market} offer")
+                    off_url = validate_web_url(offer.get('product_url', ''), f"{off_market} product URL")
+                    validated_offers.append({
+                        'marketplace': off_market,
+                        'store_name': str(offer.get('store_name', '')).strip(),
+                        'price': off_price,
+                        'mrp': off_mrp,
+                        'product_url': off_url,
+                        'affiliate_url': validate_affiliate_url(offer.get('affiliate_url', ''), f"{off_market} affiliate URL", off_url),
+                        'availability': str(offer.get('availability', availability)).strip() or availability
+                    })
+
+            now = datetime.now().isoformat()
+            cursor.execute("""
+                UPDATE products SET
+                    name = ?, brand = ?, category = ?, subcategory = ?, description = ?,
+                    image = ?, additional_images = ?, mrp = ?, selling_price = ?, discount = ?,
+                    marketplace = ?, product_url = ?, rating = ?, review_count = ?,
+                    availability = ?, stock_status = ?, featured = ?, best_value = ?,
+                    status = ?, updated_at = ?
+                WHERE id = ?
+            """, (
+                name, brand, category, subcategory, description, image,
+                json.dumps(additional_images), mrp, selling_price, discount,
+                marketplace, product_url, rating, review_count, availability,
+                stock_status, featured, best_value, status, now, product_id
+            ))
+
+            if validated_offers is not None:
+                cursor.execute("DELETE FROM product_offers WHERE product_id = ?", (product_id,))
+                all_offers = [{
+                    'marketplace': marketplace,
+                    'store_name': '',
+                    'price': selling_price,
+                    'mrp': mrp,
+                    'product_url': product_url,
+                    'affiliate_url': affiliate_url,
+                    'availability': availability
+                }] + validated_offers
+                for offer in all_offers:
+                    off_mrp = offer['mrp']
+                    off_price = offer['price']
+                    off_disc = round(((off_mrp - off_price) / off_mrp) * 100) if off_mrp > 0 and off_price <= off_mrp else 0
+                    cursor.execute("""
+                        INSERT INTO product_offers (
+                            id, product_id, marketplace, marketplace_slug, store_name, price, mrp,
+                            discount, product_url, affiliate_url, availability, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        f"offer-{secrets.token_hex(6)}", product_id, offer['marketplace'],
+                        offer['marketplace'].lower().replace(" ", "-"), offer['store_name'],
+                        off_price, off_mrp, off_disc, offer['product_url'], offer['affiliate_url'],
+                        offer['availability'], now
+                    ))
+            write_audit_log(cursor, admin, "update", "product", product_id, {"status": status})
+            conn.commit()
+        except (TypeError, ValueError, OverflowError) as error:
+            conn.rollback()
             conn.close()
-            self.send_error_json("Product not found", status=404)
+            self.send_error_json(str(error))
             return
-
-        name = body.get('name', existing['name']).strip()
-        brand = body.get('brand', existing['brand']).strip()
-        category = body.get('category', existing['category']).strip()
-        subcategory = body.get('subcategory', existing['subcategory']).strip()
-        description = body.get('description', existing['description']).strip()
-        image = body.get('image', existing['image']).strip()
-        additional_images = body.get('additional_images', json.loads(existing['additional_images'] or '[]'))
-        marketplace = body.get('marketplace', existing['marketplace']).strip()
-        product_url = body.get('product_url', existing['product_url']).strip()
-        availability = body.get('availability', existing['availability']).strip()
-        stock_status = body.get('stock_status', existing['stock_status']).strip()
-        featured = 1 if body.get('featured', existing['featured']) in [True, 1, '1', 'true'] else 0
-        best_value = 1 if body.get('best_value', existing['best_value']) in [True, 1, '1', 'true'] else 0
-        status = body.get('status', existing['status'])
-
-        mrp = float(body.get('mrp', existing['mrp']))
-        selling_price = float(body.get('selling_price', existing['selling_price']))
-        rating = float(body.get('rating', existing['rating']))
-        review_count = int(body.get('review_count', existing['review_count']))
-
-        if mrp > 0 and selling_price <= mrp:
-            discount = round(((mrp - selling_price) / mrp) * 100)
-        else:
-            discount = 0
-
-        now = datetime.now().isoformat()
-        cursor.execute("""
-            UPDATE products SET
-                name = ?, brand = ?, category = ?, subcategory = ?, description = ?,
-                image = ?, additional_images = ?, mrp = ?, selling_price = ?, discount = ?,
-                marketplace = ?, product_url = ?, rating = ?, review_count = ?,
-                availability = ?, stock_status = ?, featured = ?, best_value = ?,
-                status = ?, updated_at = ?
-            WHERE id = ?
-        """, (
-            name, brand, category, subcategory, description, image,
-            json.dumps(additional_images), mrp, selling_price, discount,
-            marketplace, product_url, rating, review_count, availability,
-            stock_status, featured, best_value, status, now, product_id
-        ))
-
-        # If offers array provided, replace offers
-        if 'offers' in body or 'comparison' in body:
-            cursor.execute("DELETE FROM product_offers WHERE product_id = ?", (product_id,))
-            offers = body.get('offers', body.get('comparison', []))
-            has_primary = False
-            for offer in offers:
-                off_market = offer.get('marketplace', '').strip()
-                if not off_market:
-                    continue
-                if off_market.lower() == marketplace.lower():
-                    has_primary = True
-                off_price = float(offer.get('price', selling_price))
-                off_mrp = float(offer.get('mrp', mrp))
-                off_disc = round(((off_mrp - off_price) / off_mrp) * 100) if off_mrp > 0 else 0
-                off_url = offer.get('product_url', offer.get('url', product_url)).strip()
-                off_avail = offer.get('availability', availability)
-                off_id = f"offer-{secrets.token_hex(6)}"
-
-                cursor.execute("""
-                    INSERT INTO product_offers (
-                        id, product_id, marketplace, marketplace_slug, store_name, price, mrp,
-                        discount, product_url, affiliate_url, availability, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    off_id, product_id, off_market,
-                    off_market.lower().replace(" ", "-"),
-                    offer.get('store_name', ''), off_price, off_mrp, off_disc,
-                    off_url, offer.get('affiliate_url', ''), off_avail, now
-                ))
-
-            # Ensure at least primary offer exists
-            if not has_primary:
-                cursor.execute("""
-                    INSERT INTO product_offers (
-                        id, product_id, marketplace, marketplace_slug, store_name, price, mrp,
-                        discount, product_url, affiliate_url, availability, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    f"offer-{secrets.token_hex(6)}", product_id, marketplace,
-                    marketplace.lower().replace(" ", "-"), "",
-                    selling_price, mrp, discount, product_url,
-                    body.get('affiliate_url', ''), availability, now
-                ))
-
-        conn.commit()
+        except sqlite3.Error:
+            conn.rollback()
+            conn.close()
+            self.send_error_json("Product could not be updated. Please try again.", status=500)
+            return
         conn.close()
 
         self.send_json({"success": True, "message": "Product updated successfully"})
@@ -1856,24 +2107,24 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
         # 1. Toggle Status: PATCH /api/products/<id>/status
         if path.startswith('/api/products/') and path.endswith('/status'):
             product_id = path[len('/api/products/'):-len('/status')].strip()
-            self.handle_patch_field(product_id, 'status')
+            self.handle_patch_field(product_id, 'status', admin)
             return
 
         # 2. Toggle Featured: PATCH /api/products/<id>/featured
         if path.startswith('/api/products/') and path.endswith('/featured'):
             product_id = path[len('/api/products/'):-len('/featured')].strip()
-            self.handle_patch_field(product_id, 'featured')
+            self.handle_patch_field(product_id, 'featured', admin)
             return
 
         # 3. Toggle Best Value: PATCH /api/products/<id>/best-value
         if path.startswith('/api/products/') and path.endswith('/best-value'):
             product_id = path[len('/api/products/'):-len('/best-value')].strip()
-            self.handle_patch_field(product_id, 'best_value')
+            self.handle_patch_field(product_id, 'best_value', admin)
             return
 
         self.send_error_json("Not Found", status=404)
 
-    def handle_patch_field(self, product_id, field_name):
+    def handle_patch_field(self, product_id, field_name, admin):
         conn = get_db()
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM products WHERE id = ?", (product_id,))
@@ -1889,6 +2140,18 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
         if field_name == 'status':
             current = existing['status']
             new_val = body.get('status', 'inactive' if current == 'active' else 'active')
+            if new_val in ('draft', 'inactive', 0, '0'):
+                new_val = 'inactive'
+            elif new_val in ('published', 'active', 1, '1'):
+                new_val = 'active'
+            else:
+                conn.close()
+                self.send_error_json("Invalid product status")
+                return
+            if new_val == 'active' and not existing['image']:
+                conn.close()
+                self.send_error_json("A product image is required before publishing")
+                return
             cursor.execute("UPDATE products SET status = ?, updated_at = ? WHERE id = ?", (new_val, now, product_id))
         elif field_name == 'featured':
             current = existing['featured']
@@ -1899,6 +2162,15 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
             new_val = body.get('best_value', 0 if current == 1 else 1)
             cursor.execute("UPDATE products SET best_value = ?, updated_at = ? WHERE id = ?", (new_val, now, product_id))
 
+        write_audit_log(
+            cursor,
+            admin,
+            "publish" if field_name == 'status' and new_val == 'active' else
+            "unpublish" if field_name == 'status' else f"update_{field_name}",
+            "product",
+            product_id,
+            {"field": field_name, "value": new_val}
+        )
         conn.commit()
         conn.close()
         self.send_json({"success": True, "field": field_name, "value": new_val})
@@ -1941,11 +2213,14 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
             if permanent:
                 cursor.execute("DELETE FROM products WHERE id = ?", (product_id,))
                 msg = "Product permanently deleted"
+                action = "delete"
             else:
                 now = datetime.now().isoformat()
                 cursor.execute("UPDATE products SET status = 'inactive', updated_at = ? WHERE id = ?", (now, product_id))
                 msg = "Product deactivated (soft-deleted)"
+                action = "unpublish"
 
+            write_audit_log(cursor, admin, action, "product", product_id, {"permanent": permanent})
             conn.commit()
             conn.close()
             self.send_json({"success": True, "message": msg, "permanent": permanent})
