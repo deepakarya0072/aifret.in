@@ -35,7 +35,7 @@ async function fetchProductsFromApi() {
     const res = await fetch('/api/products?status=active&limit=500');
     if (res.ok) {
       const data = await res.json();
-      if (Array.isArray(data.products)) {
+      if (Array.isArray(data.products) && data.products.length > 0) {
         liveProducts = data.products;
         apiLoaded = true;
         try {
@@ -51,6 +51,8 @@ async function fetchProductsFromApi() {
         renderProductDetail();
         renderDealsPage();
         renderComparePage();
+      } else if (Array.isArray(data.products)) {
+        console.info('The product API has no published products; using the existing catalog fallback.');
       }
     }
   } catch (err) {

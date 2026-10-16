@@ -1,6 +1,6 @@
 # AIFRET
 
-A premium product comparison and marketplace deal discovery platform with an integrated SQLite database and Admin Product Management system.
+A premium product comparison and marketplace deal discovery platform with a Cloudflare Pages API, D1 database, and Admin Product Management system.
 
 ## Included Pages
 
@@ -9,7 +9,9 @@ A premium product comparison and marketplace deal discovery platform with an int
 - `product.html` — Product detail page with image gallery thumbnails, product specifications, availability, and multi-marketplace price comparison table.
 - `compare.html` — Cross-store marketplace price comparison page.
 - `admin.html` — Secure Admin Product Management dashboard with product creation, draft/publish workflow, multi-marketplace offers, affiliate URLs, image upload/preview, catalogue search, filters, and pagination.
-- `server.py` — Python backend server with SQLite database and REST APIs.
+- `functions/api/[[path]].js` — Same-origin Cloudflare Pages Function for storefront, customer, and admin APIs.
+- `migrations/0001_cloudflare_schema.sql` — D1 schema.
+- `server.py` — Optional local Python backend with SQLite database and REST APIs.
 - `assets/css/styles.css` — Site styling maintaining AIFRET's premium aesthetics.
 - `assets/js/admin.js` — Admin panel controller interacting with REST API.
 - `assets/js/app.js` — Client-side dynamic rendering and filtering engine.
@@ -31,14 +33,20 @@ Then open in your browser:
 - Compare Prices: `http://localhost:8000/compare.html`
 - Admin Panel: `http://localhost:8000/admin.html`
 
-## Deploy to Render
+## Deploy to Cloudflare Pages
 
-1. In Render, create a Blueprint from this GitHub repository and deploy `render.yaml`.
-2. Set `AIFRET_ADMIN_USERNAME` and a strong `AIFRET_ADMIN_PASSWORD` in the Render environment prompt. Never commit these values.
-3. Wait for the service health check to pass, then test the Render service URL, including `/admin.html`.
-4. Add `aifret.in` as a custom domain on the Render service. In Cloudflare DNS, apply the exact records Render provides and remove or replace conflicting records that currently route the site to Pages. Make this DNS change only after the Render service is healthy.
+The production API runs on the same origin as the static site; no localhost or separate paid Python service is required. Cloudflare Pages, D1, and R2 have usage limits and may incur charges if usage exceeds the account's free allowances. Check current Cloudflare pricing and usage before enabling production traffic.
 
-The Blueprint uses a persistent disk for the SQLite database and uploaded product images; persistent disks require a paid Render service. The deployed database is separate from the local `data/aifret.db`: it starts with the sample catalog and the configured first admin account. Existing local products and images are not copied automatically. The secure-cookie setting is enabled for HTTPS.
+1. In Cloudflare **Workers & Pages**, open the project that serves `aifret.in`. Confirm it is connected to this GitHub repository and deploys the intended branch. If there is no Pages project, create one from this repository. Use the repository root, no build command, and `.` as the build output directory. Pages Functions must be deployed through the Git integration or Wrangler; a static drag-and-drop upload does not deploy the `functions/` code.
+2. Create a D1 database. In its SQL console, execute the contents of [`migrations/0001_cloudflare_schema.sql`](./migrations/0001_cloudflare_schema.sql).
+3. In the Pages project settings, add a D1 binding named `AIFRET_DB` and select that database.
+4. Create an R2 bucket, then add an R2 binding named `AIFRET_IMAGES` to the Pages project. Product image uploads and customer try-on photos use this bucket.
+5. Add `AIFRET_ADMIN_USERNAME` and `AIFRET_ADMIN_PASSWORD` as encrypted production secrets in Pages settings. Choose a unique, strong password; do not reuse a password shared in chat or store either value in the repository. The first successful admin login creates the production admin when D1 contains no admin user. Changing the secrets later does not change an existing database account.
+6. Optionally set `AIFRET_ALLOWED_AFFILIATE_DOMAINS` to a comma-separated list of approved affiliate hosts and `AI_VIDEO_MAX_GENERATIONS_PER_CUSTOMER` to a generation cap.
+7. Deploy the latest commit from the connected branch. Keep the existing DNS/custom-domain configuration unchanged until the Pages deployment is healthy.
+8. Verify `https://aifret.in/admin`, `https://aifret.in/api/admin/session` (unauthenticated requests should return 401), and `https://aifret.in/api/products`. Then sign in, check product management and uploads, refresh the page, and log out.
+
+The new D1 database is independent of local `data/aifret.db`. This migration does not transfer existing products, customer accounts, or uploaded images. The static demo catalog remains available on the storefront until D1 has published products, but the admin catalogue starts empty. Import only the product data you intend to publish; customer records and password hashes are not included or copied.
 
 ## Admin Panel Credentials
 
@@ -46,7 +54,7 @@ There is no default admin password. Set `AIFRET_ADMIN_USERNAME` and `AIFRET_ADMI
 
 ## Database Architecture
 
-A persistent SQLite database is located at `data/aifret.db`:
+The production Cloudflare D1 schema is in `migrations/0001_cloudflare_schema.sql`. The optional local Python server stores its separate SQLite database at `data/aifret.db`:
 
 - `products`: id (public slug), immutable product_code, name, brand, category, subcategory, description, image, additional_images, pricing, availability, display flags, status, and timestamps.
 - `product_offers`: id, product_id, marketplace, marketplace_slug, store_name, price, mrp, discount, product_url, affiliate_url, availability, updated_at.
@@ -85,7 +93,7 @@ Indexes are created on `status`, `category`, `brand`, `marketplace`, `featured`,
 
 The admin catalogue loads 50 products per page. Admin listing, product changes, image uploads, and audit-log APIs require an authenticated admin session. Existing database rows receive product codes during startup without replacing product records.
 
-To use secure cookies behind HTTPS, set `AIFRET_COOKIE_SECURE=true` in the server environment. Affiliate URLs must use the same host as their product URL unless explicitly approved in the comma-separated `AIFRET_ALLOWED_AFFILIATE_DOMAINS` server setting (for example, `amzn.to,affiliate.example`). Do not put admin credentials or affiliate account credentials in frontend files.
+The Pages Function sets secure, HTTP-only, same-site cookies for HTTPS. Affiliate URLs must use the same host as their product URL unless explicitly approved in the comma-separated `AIFRET_ALLOWED_AFFILIATE_DOMAINS` Pages setting (for example, `amzn.to,affiliate.example`). Do not put admin credentials or affiliate account credentials in frontend files.
 
 This increment covers the core catalogue create/edit/draft/publish workflow. Scheduled publishing/deal expiry, price history, view/click analytics, CSV import/export, configurable category lifecycle management, and live marketplace synchronization are not implemented by this feature; no demo metrics or marketplace data are presented as real.
 
@@ -98,3 +106,9 @@ python -m unittest discover -s tests -v
 ```
 
 The tests use a temporary SQLite database and do not alter `data/aifret.db`.
+
+Validate the Cloudflare Function's JavaScript syntax with:
+
+```powershell
+node --check "functions/api/[[path]].js"
+```

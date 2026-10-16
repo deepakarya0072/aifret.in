@@ -34,13 +34,13 @@ async function adminFetch(path, options = {}) {
   let response;
   try {
     response = await fetch(path, { credentials: 'same-origin', ...options });
-  } catch (error) {
-    throw new Error('Cannot connect to the AIFRET backend. Check that the Python service is running and reachable.');
+  } catch {
+    throw new Error('Cannot connect to the AIFRET API. Check the Cloudflare Pages deployment and API bindings.');
   }
 
   const contentType = response.headers.get('Content-Type') || '';
   if (response.status === 404 && path.startsWith('/api/') && !contentType.includes('application/json')) {
-    throw new Error('The AIFRET API is not available on this website (HTTP 404). Deploy server.py and route /api/* requests to this same origin.');
+    throw new Error('The AIFRET API is not available on this website (HTTP 404). Deploy the Cloudflare Pages Functions and configure the D1 binding.');
   }
   return response;
 }

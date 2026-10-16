@@ -1,5 +1,13 @@
 __pycache__/
 *.py[cod]
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+*.pem
+*.key
+service-account*.json
 data/*.db
 data/*.db-shm
 data/*.db-wal

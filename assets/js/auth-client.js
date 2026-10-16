@@ -10,19 +10,19 @@ window.AIFRET_AUTH = {
     if (!response.ok) throw new Error(data.message || 'Authentication request failed.');
     return data;
   },
-  session() { return this.request('/session'); },
-  login(credentials) { return this.request('/login', { method: 'POST', body: JSON.stringify(credentials) }); },
-  signup(credentials) { return this.request('/signup', { method: 'POST', body: JSON.stringify(credentials) }); },
-  forgot(identifier) { return this.request('/forgot-password', { method: 'POST', body: JSON.stringify({ identifier }) }); },
-  logout() { return this.request('/logout', { method: 'POST' }); },
-  profile() { return this.request('/account/profile'); },
-  updateProfile(profile) { return this.request('/account/profile', { method: 'PUT', body: JSON.stringify(profile) }); },
-  wishlist() { return this.request('/account/wishlist'); },
-  updateWishlist(productId, saved) { return this.request('/account/wishlist', { method: saved ? 'POST' : 'DELETE', body: JSON.stringify({ productId }) }); },
-  recentlyViewed() { return this.request('/account/recently-viewed'); },
-  recordViewed(productId) { return this.request('/account/recently-viewed', { method: 'POST', body: JSON.stringify({ productId }) }); },
-  previews() { return this.request('/account/ai-previews'); },
-  deletePreview(previewId) { return this.request(`/account/ai-previews/${encodeURIComponent(previewId)}`, { method: 'DELETE' }); }
+  session() { return this.request('/api/customer/session'); },
+  login(credentials) { return this.request('/api/customer/login', { method: 'POST', body: JSON.stringify(credentials) }); },
+  signup(credentials) { return this.request('/api/customer/signup', { method: 'POST', body: JSON.stringify(credentials) }); },
+  forgot(identifier) { return this.request('/api/customer/forgot-password', { method: 'POST', body: JSON.stringify({ identifier }) }); },
+  logout() { return this.request('/api/customer/logout', { method: 'POST' }); },
+  profile() { return this.request('/api/customer/account/profile'); },
+  updateProfile(profile) { return this.request('/api/customer/account/profile', { method: 'PUT', body: JSON.stringify(profile) }); },
+  wishlist() { return this.request('/api/customer/account/wishlist'); },
+  updateWishlist(productId, saved) { return this.request('/api/customer/account/wishlist', { method: saved ? 'POST' : 'DELETE', body: JSON.stringify({ productId }) }); },
+  recentlyViewed() { return this.request('/api/customer/account/recently-viewed'); },
+  recordViewed(productId) { return this.request('/api/customer/account/recently-viewed', { method: 'POST', body: JSON.stringify({ productId }) }); },
+  previews() { return this.request('/api/customer/account/ai-previews'); },
+  deletePreview(previewId) { return this.request(`/api/customer/account/ai-previews/${encodeURIComponent(previewId)}`, { method: 'DELETE' }); }
 };
 
 document.addEventListener('DOMContentLoaded', () => {
