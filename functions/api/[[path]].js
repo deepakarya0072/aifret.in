@@ -944,6 +944,7 @@ export async function onRequest(context) {
   const url = new URL(request.url);
   const route = url.pathname.replace(/^\/api\/?/, '');
   const method = request.method.toUpperCase();
+  const requestId = request.headers.get('cf-ray') || crypto.randomUUID();
 
   if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].includes(method)) {
     return error('Method Not Allowed', 405);
@@ -962,7 +963,16 @@ export async function onRequest(context) {
     return await handleDelete(request, db, route, url);
   } catch (exception) {
     if (exception.status) return error(exception.message, exception.status);
-    console.error('AIFRET API request failed:', exception.message);
-    return error('The server could not complete the request. Please try again later.', 500);
+    console.error('AIFRET API request failed:', {
+      requestId,
+      method,
+      route,
+      error: exception.stack || exception.message
+    });
+    return json({
+      error: true,
+      message: 'The server could not complete the request. Please try again later.',
+      requestId
+    }, 500, { 'X-Request-ID': requestId });
   }
 }

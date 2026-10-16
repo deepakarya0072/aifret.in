@@ -76,9 +76,10 @@ const workerText = await readFile(new URL('../functions/api/[[path]].js', import
 const runnableWorker = workerText
   .replace('export async function onRequest(context)', 'async function onRequest(context)')
   .concat('\nglobalThis.worker = onRequest;');
+const workerErrors = [];
 const context = vm.createContext({
   atob: (value) => Buffer.from(value, 'base64').toString('binary'),
-  console: { error() {} },
+  console: { error(...args) { workerErrors.push(args); } },
   crypto: webcrypto,
   Headers,
   Request,
@@ -153,4 +154,16 @@ test('Cloudflare admin login, session persistence, protected APIs, and logout', 
   assert.equal(logout.status, 200);
   const invalidatedSession = await request(env, '/api/admin/session', { cookie });
   assert.equal(invalidatedSession.status, 401);
+});
+
+test('unexpected backend errors are logged privately and return a correlatable generic error', async () => {
+  const response = await request({}, '/api/admin/session');
+  const result = await response.json();
+
+  assert.equal(response.status, 500);
+  assert.equal(response.headers.get('X-Request-ID'), result.requestId);
+  assert.match(result.message, /could not complete the request/);
+  assert.equal('stack' in result, false);
+  assert.match(JSON.stringify(workerErrors), /D1 binding AIFRET_DB is missing/);
+  assert.match(JSON.stringify(workerErrors), new RegExp(result.requestId));
 });
