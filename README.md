@@ -31,6 +31,15 @@ Then open in your browser:
 - Compare Prices: `http://localhost:8000/compare.html`
 - Admin Panel: `http://localhost:8000/admin.html`
 
+## Deploy to Render
+
+1. In Render, create a Blueprint from this GitHub repository and deploy `render.yaml`.
+2. Set `AIFRET_ADMIN_USERNAME` and a strong `AIFRET_ADMIN_PASSWORD` in the Render environment prompt. Never commit these values.
+3. Wait for the service health check to pass, then test the Render service URL, including `/admin.html`.
+4. Add `aifret.in` as a custom domain on the Render service. In Cloudflare DNS, apply the exact records Render provides and remove or replace conflicting records that currently route the site to Pages. Make this DNS change only after the Render service is healthy.
+
+The Blueprint uses a persistent disk for the SQLite database and uploaded product images; persistent disks require a paid Render service. The deployed database is separate from the local `data/aifret.db`: it starts with the sample catalog and the configured first admin account. Existing local products and images are not copied automatically. The secure-cookie setting is enabled for HTTPS.
+
 ## Admin Panel Credentials
 
 There is no default admin password. Set `AIFRET_ADMIN_USERNAME` and `AIFRET_ADMIN_PASSWORD` before the first startup when the database has no admin account. Existing database accounts are not changed by updating these variables.

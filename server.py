@@ -24,8 +24,8 @@ from datetime import datetime, timedelta
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "data")
-UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
+DATA_DIR = os.environ.get("AIFRET_DATA_DIR", os.path.join(BASE_DIR, "data"))
+UPLOADS_DIR = os.environ.get("AIFRET_UPLOADS_DIR", os.path.join(BASE_DIR, "uploads"))
 DB_PATH = os.path.join(DATA_DIR, "aifret.db")
 PORT = int(os.environ.get("PORT", 8000))
 COOKIE_SECURE = os.environ.get("AIFRET_COOKIE_SECURE", "false").strip().lower() == "true"
