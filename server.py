@@ -716,6 +716,12 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=BASE_DIR, **kwargs)
 
+    def translate_path(self, path):
+        parsed_path = urllib.parse.urlsplit(path)
+        if parsed_path.path == '/admin':
+            path = urllib.parse.urlunsplit(parsed_path._replace(path='/admin.html'))
+        return super().translate_path(path)
+
     # Helper: Send JSON Response
     def send_json(self, data, status=200, headers=None):
         payload = json.dumps(data, default=str).encode('utf-8')

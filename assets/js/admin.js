@@ -30,13 +30,34 @@ function escapeHtml(str = '') {
   }[c]));
 }
 
+async function adminFetch(path, options = {}) {
+  let response;
+  try {
+    response = await fetch(path, { credentials: 'same-origin', ...options });
+  } catch (error) {
+    throw new Error('Cannot connect to the AIFRET backend. Check that the Python service is running and reachable.');
+  }
+
+  const contentType = response.headers.get('Content-Type') || '';
+  if (response.status === 404 && path.startsWith('/api/') && !contentType.includes('application/json')) {
+    throw new Error('The AIFRET API is not available on this website (HTTP 404). Deploy server.py and route /api/* requests to this same origin.');
+  }
+  return response;
+}
+
+function setLoginStatus(message) {
+  const statusEl = document.querySelector('[data-admin-login-status]');
+  statusEl.textContent = message;
+  statusEl.style.color = message ? 'var(--danger)' : '';
+}
+
 // ---------------------------------------------------------------------------
 // Authentication & Session
 // ---------------------------------------------------------------------------
 
 async function checkAdminSession() {
   try {
-    const res = await fetch('/api/admin/session');
+    const res = await adminFetch('/api/admin/session');
     if (res.ok) {
       const data = await res.json();
       showDashboard(data.user?.username || 'Admin');
@@ -45,6 +66,7 @@ async function checkAdminSession() {
     }
   } catch (err) {
     showLogin();
+    setLoginStatus(err.message);
   }
 }
 
@@ -76,7 +98,7 @@ async function handleAdminLogin(event) {
   };
 
   try {
-    const res = await fetch('/api/admin/login', {
+    const res = await adminFetch('/api/admin/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -91,16 +113,21 @@ async function handleAdminLogin(event) {
       statusEl.style.color = 'var(--danger)';
     }
   } catch (err) {
-    statusEl.textContent = 'Server connection error. Ensure server.py is running.';
+    statusEl.textContent = err.message;
     statusEl.style.color = 'var(--danger)';
   }
 }
 
 async function handleAdminLogout() {
   try {
-    await fetch('/api/admin/logout', { method: 'POST' });
-  } catch (e) {}
-  showLogin();
+    const response = await adminFetch('/api/admin/logout', { method: 'POST' });
+    if (!response.ok) throw new Error('Could not sign out. Please try again.');
+    showLogin();
+  } catch (error) {
+    const statusEl = document.querySelector('[data-admin-status]');
+    statusEl.textContent = error.message;
+    statusEl.style.color = 'var(--danger)';
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -120,7 +147,7 @@ async function loadProducts(resetPage = false) {
     offset: String(adminOffset)
   });
   try {
-    const res = await fetch(`/api/products?${query}`);
+    const res = await adminFetch(`/api/products?${query}`);
     if (!res.ok) throw new Error('Failed to load products');
     const data = await res.json();
     adminProducts = data.products || [];
@@ -358,7 +385,7 @@ async function uploadFileToServer(file) {
     const reader = new FileReader();
     reader.onload = async () => {
       try {
-        const res = await fetch('/api/upload', {
+        const res = await adminFetch('/api/upload', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ data: reader.result })
@@ -620,13 +647,13 @@ async function handleProductSubmit(event) {
   try {
     let res;
     if (editingProductId) {
-      res = await fetch(`/api/products/${encodeURIComponent(editingProductId)}`, {
+      res = await adminFetch(`/api/products/${encodeURIComponent(editingProductId)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
     } else {
-      res = await fetch('/api/products', {
+      res = await adminFetch('/api/products', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -666,7 +693,7 @@ async function handleTableActions(event) {
     populateFormForEdit(product);
   } else if (action === 'toggle-status') {
     try {
-      const res = await fetch(`/api/products/${encodeURIComponent(productId)}/status`, { method: 'PATCH' });
+      const res = await adminFetch(`/api/products/${encodeURIComponent(productId)}/status`, { method: 'PATCH' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || 'Unable to update publication status.');
       statusEl.textContent = data.value === 'active' ? 'Product published.' : 'Product saved as a draft.';
@@ -678,7 +705,7 @@ async function handleTableActions(event) {
     }
   } else if (action === 'toggle-featured') {
     try {
-      const res = await fetch(`/api/products/${encodeURIComponent(productId)}/featured`, { method: 'PATCH' });
+      const res = await adminFetch(`/api/products/${encodeURIComponent(productId)}/featured`, { method: 'PATCH' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || 'Unable to update featured status.');
       await loadProducts();
@@ -688,7 +715,7 @@ async function handleTableActions(event) {
     }
   } else if (action === 'toggle-best') {
     try {
-      const res = await fetch(`/api/products/${encodeURIComponent(productId)}/best-value`, { method: 'PATCH' });
+      const res = await adminFetch(`/api/products/${encodeURIComponent(productId)}/best-value`, { method: 'PATCH' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || 'Unable to update best-value status.');
       await loadProducts();
@@ -724,7 +751,7 @@ async function performDelete(permanent = false) {
   closeDeleteModal();
 
   try {
-    const res = await fetch(`/api/products/${encodeURIComponent(id)}?permanent=${permanent ? 'true' : 'false'}`, {
+    const res = await adminFetch(`/api/products/${encodeURIComponent(id)}?permanent=${permanent ? 'true' : 'false'}`, {
       method: 'DELETE'
     });
     if (res.ok) {

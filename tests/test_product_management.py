@@ -146,6 +146,79 @@ class ProductManagementApiTests(unittest.TestCase):
         self.assertEqual(status, 401)
         self.assertIn("Unauthorized", response["message"])
 
+    def test_admin_page_is_available_at_both_routes(self):
+        pages = []
+        for path in ("/admin", "/admin.html"):
+            with urllib.request.urlopen(self.base_url + path) as response:
+                self.assertEqual(response.status, 200)
+                self.assertIn("text/html", response.headers.get("Content-Type", ""))
+                pages.append(response.read())
+        self.assertEqual(pages[0], pages[1])
+        self.assertIn(b"Admin Sign In", pages[0])
+
+    def test_invalid_admin_login_and_protected_api_reject_unauthenticated_requests(self):
+        public_client = urllib.request.build_opener()
+        status, response = self.request_json(
+            "/api/admin/login",
+            {"username": "test-admin", "password": "wrong-password"},
+            "POST",
+            client=public_client
+        )
+        self.assertEqual(status, 401)
+        self.assertIn("Invalid username or password", response["message"])
+
+        status, response = self.request_json(
+            "/api/admin/audit-logs", client=public_client
+        )
+        self.assertEqual(status, 401)
+        self.assertIn("Unauthorized", response["message"])
+
+        status, response = self.request_json(
+            "/api/products", self.make_product(), "POST", client=public_client
+        )
+        self.assertEqual(status, 401)
+
+    def test_admin_session_persists_and_logout_invalidates_it(self):
+        status, session = self.request_json("/api/admin/session")
+        self.assertEqual(status, 200)
+        self.assertTrue(session["authenticated"])
+        self.assertEqual(session["user"]["username"], "test-admin")
+
+        status, listing = self.request_json("/api/products?status=all&limit=50")
+        self.assertEqual(status, 200)
+        self.assertGreater(listing["total"], 0)
+        self.assertTrue(listing["products"])
+
+        status, logout = self.request_json("/api/admin/logout", {}, "POST")
+        self.assertEqual(status, 200)
+        self.assertTrue(logout["success"])
+
+        status, session = self.request_json("/api/admin/session")
+        self.assertEqual(status, 401)
+        self.assertFalse(session["authenticated"])
+
+    def test_admin_cookie_is_secure_when_https_setting_is_enabled(self):
+        previous_cookie_secure = server_module.COOKIE_SECURE
+        server_module.COOKIE_SECURE = True
+        try:
+            request = urllib.request.Request(
+                self.base_url + "/api/admin/login",
+                data=json.dumps({
+                    "username": "test-admin",
+                    "password": "test-password-123"
+                }).encode("utf-8"),
+                method="POST",
+                headers={"Content-Type": "application/json"}
+            )
+            with urllib.request.urlopen(request) as response:
+                self.assertEqual(response.status, 200)
+                set_cookie = response.headers.get("Set-Cookie", "")
+                self.assertIn("HttpOnly", set_cookie)
+                self.assertIn("SameSite=Lax", set_cookie)
+                self.assertIn("Secure", set_cookie)
+        finally:
+            server_module.COOKIE_SECURE = previous_cookie_secure
+
     def test_publish_requires_image_and_public_detail_is_then_available(self):
         self.request_json("/api/products", self.make_product(), "POST")
         status, response = self.request_json(
