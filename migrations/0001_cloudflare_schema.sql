@@ -6,6 +6,21 @@ CREATE TABLE IF NOT EXISTS products (
   category TEXT NOT NULL,
   subcategory TEXT DEFAULT '',
   description TEXT DEFAULT '',
+  short_description TEXT DEFAULT '',
+  detailed_description TEXT DEFAULT '',
+  key_features TEXT DEFAULT '[]',
+  specifications TEXT DEFAULT '{}',
+  model_number TEXT DEFAULT '',
+  variants TEXT DEFAULT '[]',
+  color TEXT DEFAULT '',
+  size TEXT DEFAULT '',
+  material TEXT DEFAULT '',
+  weight TEXT DEFAULT '',
+  dimensions TEXT DEFAULT '',
+  manufacturer TEXT DEFAULT '',
+  country_of_origin TEXT DEFAULT '',
+  product_video_url TEXT DEFAULT '',
+  warranty_info TEXT DEFAULT '',
   image TEXT NOT NULL DEFAULT '',
   additional_images TEXT DEFAULT '[]',
   mrp REAL NOT NULL,
@@ -36,6 +51,10 @@ CREATE TABLE IF NOT EXISTS product_offers (
   product_url TEXT NOT NULL,
   affiliate_url TEXT DEFAULT '',
   availability TEXT DEFAULT 'In Stock',
+  variant_info TEXT DEFAULT '',
+  data_source TEXT DEFAULT 'manual',
+  verification_status TEXT DEFAULT 'needs_verification',
+  last_verified_at TEXT DEFAULT '',
   updated_at TEXT NOT NULL,
   FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
 );
@@ -66,6 +85,15 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   details TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL,
   FOREIGN KEY (admin_user_id) REFERENCES admin_users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS affiliate_clicks (
+  id TEXT PRIMARY KEY,
+  product_id TEXT NOT NULL,
+  offer_id TEXT NOT NULL,
+  marketplace TEXT NOT NULL,
+  clicked_at TEXT NOT NULL,
+  FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS customer_users (
@@ -149,6 +177,8 @@ CREATE INDEX IF NOT EXISTS idx_products_best_value ON products(best_value);
 CREATE INDEX IF NOT EXISTS idx_offers_product_id ON product_offers(product_id);
 CREATE INDEX IF NOT EXISTS idx_offers_marketplace ON product_offers(marketplace);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_affiliate_clicks_product ON affiliate_clicks(product_id);
+CREATE INDEX IF NOT EXISTS idx_affiliate_clicks_marketplace ON affiliate_clicks(marketplace);
 CREATE INDEX IF NOT EXISTS idx_customer_users_email ON customer_users(email);
 CREATE INDEX IF NOT EXISTS idx_customer_users_mobile ON customer_users(mobile);
 CREATE INDEX IF NOT EXISTS idx_customer_sessions_user ON customer_sessions(user_id);

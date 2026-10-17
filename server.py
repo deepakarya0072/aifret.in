@@ -29,6 +29,14 @@ UPLOADS_DIR = os.environ.get("AIFRET_UPLOADS_DIR", os.path.join(BASE_DIR, "uploa
 DB_PATH = os.path.join(DATA_DIR, "aifret.db")
 PORT = int(os.environ.get("PORT", 8000))
 COOKIE_SECURE = os.environ.get("AIFRET_COOKIE_SECURE", "false").strip().lower() == "true"
+DEFAULT_CATEGORIES = [
+    'Mobiles & Tablets', 'Laptops & Computers', 'Electronics & Accessories',
+    'Headphones & Earbuds', 'Fashion & Clothing', 'Shoes & Footwear', 'Watches',
+    'Beauty & Personal Care', 'Home & Kitchen', 'Appliances', 'Furniture',
+    'Bags & Luggage', 'Sports & Fitness', 'Toys & Baby Products',
+    'Books & Stationery', 'Grocery & Daily Essentials', 'Other Categories'
+]
+DEFAULT_MARKETPLACES = ['Amazon', 'Flipkart', 'Meesho', 'Myntra']
 AI_VIDEO_PROVIDER = os.environ.get("AI_VIDEO_PROVIDER", "mock").strip().lower()
 AI_VIDEO_API_KEY = os.environ.get("AI_VIDEO_API_KEY", "").strip()
 AI_VIDEO_MODEL = os.environ.get("AI_VIDEO_MODEL", "aifret-tryon-mock").strip()
@@ -207,6 +215,21 @@ def init_database():
         category TEXT NOT NULL,
         subcategory TEXT DEFAULT '',
         description TEXT DEFAULT '',
+        short_description TEXT DEFAULT '',
+        detailed_description TEXT DEFAULT '',
+        key_features TEXT DEFAULT '[]',
+        specifications TEXT DEFAULT '{}',
+        model_number TEXT DEFAULT '',
+        variants TEXT DEFAULT '[]',
+        color TEXT DEFAULT '',
+        size TEXT DEFAULT '',
+        material TEXT DEFAULT '',
+        weight TEXT DEFAULT '',
+        dimensions TEXT DEFAULT '',
+        manufacturer TEXT DEFAULT '',
+        country_of_origin TEXT DEFAULT '',
+        product_video_url TEXT DEFAULT '',
+        warranty_info TEXT DEFAULT '',
         image TEXT NOT NULL,
         additional_images TEXT DEFAULT '[]',
         mrp REAL NOT NULL,
@@ -240,7 +263,22 @@ def init_database():
         product_url TEXT NOT NULL,
         affiliate_url TEXT DEFAULT '',
         availability TEXT DEFAULT 'In Stock',
+        variant_info TEXT DEFAULT '',
+        data_source TEXT DEFAULT 'manual',
+        verification_status TEXT DEFAULT 'needs_verification',
+        last_verified_at TEXT DEFAULT '',
         updated_at TEXT NOT NULL,
+        FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+    );
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS affiliate_clicks (
+        id TEXT PRIMARY KEY,
+        product_id TEXT NOT NULL,
+        offer_id TEXT NOT NULL,
+        marketplace TEXT NOT NULL,
+        clicked_at TEXT NOT NULL,
         FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
     );
     """)
@@ -374,6 +412,25 @@ def init_database():
     product_columns = {row['name'] for row in cursor.execute("PRAGMA table_info(products)").fetchall()}
     if 'product_code' not in product_columns:
         cursor.execute("ALTER TABLE products ADD COLUMN product_code TEXT")
+    product_additions = {
+        'short_description': "TEXT DEFAULT ''", 'detailed_description': "TEXT DEFAULT ''",
+        'key_features': "TEXT DEFAULT '[]'", 'specifications': "TEXT DEFAULT '{}'",
+        'model_number': "TEXT DEFAULT ''", 'variants': "TEXT DEFAULT '[]'",
+        'color': "TEXT DEFAULT ''", 'size': "TEXT DEFAULT ''", 'material': "TEXT DEFAULT ''",
+        'weight': "TEXT DEFAULT ''", 'dimensions': "TEXT DEFAULT ''", 'manufacturer': "TEXT DEFAULT ''",
+        'country_of_origin': "TEXT DEFAULT ''", 'product_video_url': "TEXT DEFAULT ''",
+        'warranty_info': "TEXT DEFAULT ''"
+    }
+    for column, definition in product_additions.items():
+        if column not in product_columns:
+            cursor.execute(f"ALTER TABLE products ADD COLUMN {column} {definition}")
+    offer_columns = {row['name'] for row in cursor.execute("PRAGMA table_info(product_offers)").fetchall()}
+    for column, definition in {
+        'variant_info': "TEXT DEFAULT ''", 'data_source': "TEXT DEFAULT 'manual'",
+        'verification_status': "TEXT DEFAULT 'needs_verification'", 'last_verified_at': "TEXT DEFAULT ''"
+    }.items():
+        if column not in offer_columns:
+            cursor.execute(f"ALTER TABLE product_offers ADD COLUMN {column} {definition}")
 
     # Backfill immutable catalogue codes for records created before this migration.
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_products_product_code ON products(product_code);")
@@ -386,6 +443,8 @@ def init_database():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_offers_product_id ON product_offers(product_id);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_offers_marketplace ON product_offers(marketplace);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_affiliate_clicks_product ON affiliate_clicks(product_id);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_affiliate_clicks_marketplace ON affiliate_clicks(marketplace);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_users_email ON customer_users(email);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_users_mobile ON customer_users(mobile);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_sessions_user ON customer_sessions(user_id);")
@@ -878,6 +937,10 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
             self.handle_get_audit_logs(query)
             return
 
+        if path == '/api/admin/affiliate-clicks':
+            self.handle_get_affiliate_clicks(query)
+            return
+
         # 6. Customer Session Check: /session
         if path in ['/session', '/api/customer/session']:
             customer = self.authenticate_customer()
@@ -1061,6 +1124,11 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
                 prod['additional_images'] = json.loads(prod['additional_images'] or '[]')
             except Exception:
                 prod['additional_images'] = []
+            for field, fallback in (('key_features', []), ('specifications', {}), ('variants', [])):
+                try:
+                    prod[field] = json.loads(prod.get(field) or json.dumps(fallback))
+                except (TypeError, ValueError):
+                    prod[field] = fallback
 
             # Fetch offers for this product
             cursor.execute("""
@@ -1092,9 +1160,11 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
             stat_row = cursor.fetchone()
             response['stats'] = {key: stat_row[key] or 0 for key in ('total', 'published', 'drafts', 'featured', 'best_value')}
             cursor.execute("SELECT DISTINCT category FROM products WHERE category != '' ORDER BY category COLLATE NOCASE")
-            response['categories'] = [row['category'] for row in cursor.fetchall()]
+            stored_categories = [row['category'] for row in cursor.fetchall()]
+            response['categories'] = sorted(set(DEFAULT_CATEGORIES + stored_categories), key=str.casefold)
             cursor.execute("SELECT DISTINCT marketplace FROM product_offers WHERE marketplace != '' ORDER BY marketplace COLLATE NOCASE")
-            response['marketplaces'] = [row['marketplace'] for row in cursor.fetchall()]
+            stored_marketplaces = [row['marketplace'] for row in cursor.fetchall()]
+            response['marketplaces'] = sorted(set(DEFAULT_MARKETPLACES + stored_marketplaces), key=str.casefold)
         conn.close()
         self.send_json(response)
 
@@ -1165,7 +1235,7 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
             ) WHERE marketplace IS NOT NULL AND marketplace != ''
             ORDER BY marketplace ASC
         """)
-        marketplaces = [r[0] for r in cursor.fetchall()]
+        marketplaces = sorted(set(DEFAULT_MARKETPLACES + [r[0] for r in cursor.fetchall()]), key=str.casefold)
         conn.close()
         self.send_json({"marketplaces": marketplaces})
 
@@ -1179,9 +1249,54 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
             GROUP BY category
             ORDER BY count DESC, category ASC
         """)
-        categories = [{"name": r[0], "count": r[1], "slug": r[0].lower().replace(" ", "-")} for r in cursor.fetchall()]
+        counts = {r[0]: r[1] for r in cursor.fetchall()}
+        categories = [{"name": name, "count": counts.get(name, 0), "slug": name.lower().replace(" ", "-")} for name in sorted(set(DEFAULT_CATEGORIES) | set(counts), key=str.casefold)]
         conn.close()
         self.send_json({"categories": categories})
+
+    def handle_affiliate_click(self):
+        body = self.get_json_body()
+        if not body:
+            self.send_error_json("Invalid request body")
+            return
+        product_id = str(body.get('product_id', '')).strip()
+        offer_id = str(body.get('offer_id', '')).strip()
+        if not product_id or not offer_id:
+            self.send_error_json("Product and offer are required")
+            return
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT product_id, marketplace FROM product_offers
+            WHERE id = ? AND product_id = ? AND affiliate_url != ''
+        """, (offer_id, product_id))
+        offer = cursor.fetchone()
+        if not offer:
+            conn.close()
+            self.send_error_json("Affiliate offer not found", status=404)
+            return
+        cursor.execute("""
+            INSERT INTO affiliate_clicks (id, product_id, offer_id, marketplace, clicked_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, (f"click-{secrets.token_hex(10)}", product_id, offer_id, offer['marketplace'], datetime.now().isoformat()))
+        conn.commit()
+        conn.close()
+        self.send_json({"success": True})
+
+    def handle_get_affiliate_clicks(self, query):
+        if not self.authenticate_admin():
+            self.send_error_json("Unauthorized", status=401)
+            return
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT marketplace, product_id, COUNT(*) AS clicks, MAX(clicked_at) AS last_clicked_at
+            FROM affiliate_clicks GROUP BY marketplace, product_id
+            ORDER BY clicks DESC, last_clicked_at DESC
+        """)
+        rows = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        self.send_json({"clicks": rows})
 
     # -----------------------------------------------------------------------
     # POST Handlers
@@ -1236,6 +1351,10 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
             return
 
         # 10. Image Upload
+        if path == '/api/affiliate-click':
+            self.handle_affiliate_click()
+            return
+
         if path == '/api/upload':
             self.handle_image_upload()
             return
@@ -1789,6 +1908,23 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
             category = str(body.get('category', '')).strip()
             subcategory = str(body.get('subcategory', '')).strip()
             description = str(body.get('description', '')).strip()
+            short_description = str(body.get('short_description', '')).strip()
+            detailed_description = str(body.get('detailed_description', description)).strip()
+            key_features = body.get('key_features', [])
+            specifications = body.get('specifications', {})
+            variants = body.get('variants', [])
+            if not isinstance(key_features, list) or not isinstance(specifications, dict) or not isinstance(variants, list):
+                raise ValueError("Features, specifications, and variants must use valid list/object values")
+            model_number = str(body.get('model_number', '')).strip()
+            color = str(body.get('color', '')).strip()
+            size = str(body.get('size', '')).strip()
+            material = str(body.get('material', '')).strip()
+            weight = str(body.get('weight', '')).strip()
+            dimensions = str(body.get('dimensions', '')).strip()
+            manufacturer = str(body.get('manufacturer', '')).strip()
+            country_of_origin = str(body.get('country_of_origin', '')).strip()
+            product_video_url = validate_web_url(body.get('product_video_url', ''), "Product video URL", required=False)
+            warranty_info = str(body.get('warranty_info', '')).strip()
             image = validate_image_reference(body.get('image', ''))
             additional_images = body.get('additional_images', [])
             marketplace = str(body.get('marketplace', '')).strip()
@@ -1840,7 +1976,11 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
                     'mrp': off_mrp,
                     'product_url': off_url,
                     'affiliate_url': validate_affiliate_url(offer.get('affiliate_url', ''), f"{off_market} affiliate URL", off_url),
-                    'availability': str(offer.get('availability', availability)).strip() or availability
+                    'availability': str(offer.get('availability', availability)).strip() or availability,
+                    'variant_info': str(offer.get('variant_info', '')).strip(),
+                    'data_source': str(offer.get('data_source', 'manual')).strip() or 'manual',
+                    'verification_status': str(offer.get('verification_status', 'needs_verification')).strip() or 'needs_verification',
+                    'last_verified_at': str(offer.get('last_verified_at', '')).strip()
                 })
         except (TypeError, ValueError, OverflowError) as error:
             self.send_error_json(str(error))
@@ -1871,12 +2011,23 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
             product_code = f"AIFRET-PROD-{cursor.fetchone()[0]:06d}"
             cursor.execute("""
                 INSERT INTO products (
-                    id, product_code, name, brand, category, subcategory, description, image, additional_images,
+                    id, product_code, name, brand, category, subcategory, description, short_description,
+                    detailed_description, key_features, specifications, model_number, variants, color, size,
+                    material, weight, dimensions, manufacturer, country_of_origin, product_video_url, warranty_info,
+                    image, additional_images,
                     mrp, selling_price, discount, marketplace, product_url, rating, review_count,
                     availability, stock_status, featured, best_value, status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?
+                )
             """, (
-                product_id, product_code, name, brand, category, subcategory, description, image,
+                product_id, product_code, name, brand, category, subcategory, description, short_description,
+                detailed_description, json.dumps(key_features), json.dumps(specifications), model_number,
+                json.dumps(variants), color, size, material, weight, dimensions, manufacturer,
+                country_of_origin, product_video_url, warranty_info, image,
                 json.dumps(additional_images), mrp, selling_price, discount, marketplace,
                 product_url, rating, review_count, availability, stock_status,
                 featured, best_value, status, now, now
@@ -1889,7 +2040,11 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
                 'mrp': mrp,
                 'product_url': product_url,
                 'affiliate_url': affiliate_url,
-                'availability': availability
+                'availability': availability,
+                'variant_info': str(body.get('variant_info', '')).strip(),
+                'data_source': str(body.get('data_source', 'manual')).strip() or 'manual',
+                'verification_status': str(body.get('verification_status', 'needs_verification')).strip() or 'needs_verification',
+                'last_verified_at': str(body.get('last_verified_at', '')).strip()
             }] + validated_offers
             for offer in offer_rows:
                 off_mrp = offer['mrp']
@@ -1898,13 +2053,15 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
                 cursor.execute("""
                     INSERT INTO product_offers (
                         id, product_id, marketplace, marketplace_slug, store_name, price, mrp,
-                        discount, product_url, affiliate_url, availability, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        discount, product_url, affiliate_url, availability, variant_info, data_source,
+                        verification_status, last_verified_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     f"offer-{secrets.token_hex(6)}", product_id, offer['marketplace'],
                     offer['marketplace'].lower().replace(" ", "-"), offer['store_name'],
                     off_price, off_mrp, off_disc, offer['product_url'], offer['affiliate_url'],
-                    offer['availability'], now
+                    offer['availability'], offer['variant_info'], offer['data_source'],
+                    offer['verification_status'], offer['last_verified_at'], now
                 ))
             write_audit_log(cursor, admin, "create", "product", product_id, {"product_code": product_code, "status": status})
             conn.commit()
@@ -1982,6 +2139,23 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
             category = str(body.get('category', existing['category']) or '').strip()
             subcategory = str(body.get('subcategory', existing['subcategory']) or '').strip()
             description = str(body.get('description', existing['description']) or '').strip()
+            short_description = str(body.get('short_description', existing['short_description']) or '').strip()
+            detailed_description = str(body.get('detailed_description', existing['detailed_description'] or description) or '').strip()
+            key_features = body.get('key_features', json.loads(existing['key_features'] or '[]'))
+            specifications = body.get('specifications', json.loads(existing['specifications'] or '{}'))
+            variants = body.get('variants', json.loads(existing['variants'] or '[]'))
+            if not isinstance(key_features, list) or not isinstance(specifications, dict) or not isinstance(variants, list):
+                raise ValueError("Features, specifications, and variants must use valid list/object values")
+            model_number = str(body.get('model_number', existing['model_number']) or '').strip()
+            color = str(body.get('color', existing['color']) or '').strip()
+            size = str(body.get('size', existing['size']) or '').strip()
+            material = str(body.get('material', existing['material']) or '').strip()
+            weight = str(body.get('weight', existing['weight']) or '').strip()
+            dimensions = str(body.get('dimensions', existing['dimensions']) or '').strip()
+            manufacturer = str(body.get('manufacturer', existing['manufacturer']) or '').strip()
+            country_of_origin = str(body.get('country_of_origin', existing['country_of_origin']) or '').strip()
+            product_video_url = validate_web_url(body.get('product_video_url', existing['product_video_url']), "Product video URL", required=False)
+            warranty_info = str(body.get('warranty_info', existing['warranty_info']) or '').strip()
             image = validate_image_reference(body.get('image', existing['image']))
             additional_images = body.get('additional_images', json.loads(existing['additional_images'] or '[]'))
             if not isinstance(additional_images, list) or not all(isinstance(url, str) for url in additional_images):
@@ -2037,21 +2211,30 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
                         'mrp': off_mrp,
                         'product_url': off_url,
                         'affiliate_url': validate_affiliate_url(offer.get('affiliate_url', ''), f"{off_market} affiliate URL", off_url),
-                        'availability': str(offer.get('availability', availability)).strip() or availability
+                        'availability': str(offer.get('availability', availability)).strip() or availability,
+                        'variant_info': str(offer.get('variant_info', '')).strip(),
+                        'data_source': str(offer.get('data_source', 'manual')).strip() or 'manual',
+                        'verification_status': str(offer.get('verification_status', 'needs_verification')).strip() or 'needs_verification',
+                        'last_verified_at': str(offer.get('last_verified_at', '')).strip()
                     })
 
             now = datetime.now().isoformat()
             cursor.execute("""
                 UPDATE products SET
-                    name = ?, brand = ?, category = ?, subcategory = ?, description = ?,
-                    image = ?, additional_images = ?, mrp = ?, selling_price = ?, discount = ?,
+                    name = ?, brand = ?, category = ?, subcategory = ?, description = ?, short_description = ?,
+                    detailed_description = ?, key_features = ?, specifications = ?, model_number = ?, variants = ?,
+                    color = ?, size = ?, material = ?, weight = ?, dimensions = ?, manufacturer = ?,
+                    country_of_origin = ?, product_video_url = ?, warranty_info = ?, image = ?, additional_images = ?,
+                    mrp = ?, selling_price = ?, discount = ?,
                     marketplace = ?, product_url = ?, rating = ?, review_count = ?,
                     availability = ?, stock_status = ?, featured = ?, best_value = ?,
                     status = ?, updated_at = ?
                 WHERE id = ?
             """, (
-                name, brand, category, subcategory, description, image,
-                json.dumps(additional_images), mrp, selling_price, discount,
+                name, brand, category, subcategory, description, short_description, detailed_description,
+                json.dumps(key_features), json.dumps(specifications), model_number, json.dumps(variants),
+                color, size, material, weight, dimensions, manufacturer, country_of_origin,
+                product_video_url, warranty_info, image, json.dumps(additional_images), mrp, selling_price, discount,
                 marketplace, product_url, rating, review_count, availability,
                 stock_status, featured, best_value, status, now, product_id
             ))
@@ -2065,7 +2248,11 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
                     'mrp': mrp,
                     'product_url': product_url,
                     'affiliate_url': affiliate_url,
-                    'availability': availability
+                    'availability': availability,
+                    'variant_info': str(body.get('variant_info', '')).strip(),
+                    'data_source': str(body.get('data_source', 'manual')).strip() or 'manual',
+                    'verification_status': str(body.get('verification_status', 'needs_verification')).strip() or 'needs_verification',
+                    'last_verified_at': str(body.get('last_verified_at', '')).strip()
                 }] + validated_offers
                 for offer in all_offers:
                     off_mrp = offer['mrp']
@@ -2074,13 +2261,15 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
                     cursor.execute("""
                         INSERT INTO product_offers (
                             id, product_id, marketplace, marketplace_slug, store_name, price, mrp,
-                            discount, product_url, affiliate_url, availability, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            discount, product_url, affiliate_url, availability, variant_info, data_source,
+                            verification_status, last_verified_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         f"offer-{secrets.token_hex(6)}", product_id, offer['marketplace'],
                         offer['marketplace'].lower().replace(" ", "-"), offer['store_name'],
                         off_price, off_mrp, off_disc, offer['product_url'], offer['affiliate_url'],
-                        offer['availability'], now
+                        offer['availability'], offer['variant_info'], offer['data_source'],
+                        offer['verification_status'], offer['last_verified_at'], now
                     ))
             write_audit_log(cursor, admin, "update", "product", product_id, {"status": status})
             conn.commit()

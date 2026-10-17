@@ -3,6 +3,11 @@ const CUSTOMER_COOKIE = 'aifret_customer_session';
 const PASSWORD_ITERATIONS = 100000;
 const MAX_JSON_BYTES = 15 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const DEFAULT_CATEGORIES = [
+  'Electronics', 'Mobiles', 'Laptops', 'Fashion', 'Shoes', 'Beauty',
+  'Home & Kitchen', 'Watches'
+];
+const DEFAULT_MARKETPLACES = ['Amazon', 'Flipkart', 'Meesho', 'Myntra', 'Other Stores'];
 
 function json(data, status = 200, headers = {}) {
   return new Response(JSON.stringify(data), {
@@ -244,7 +249,11 @@ function validateOffers(offers, primaryMarketplace, primaryAvailability, env) {
       mrp,
       product_url: productUrl,
       affiliate_url: validateAffiliateUrl(offer.affiliate_url, `${marketplace} affiliate URL`, productUrl, env),
-      availability: String(offer.availability || primaryAvailability).trim() || primaryAvailability
+      availability: String(offer.availability || primaryAvailability).trim() || primaryAvailability,
+      variant_info: String(offer.variant_info || '').trim(),
+      data_source: String(offer.data_source || 'manual').trim() || 'manual',
+      verification_status: String(offer.verification_status || 'needs_verification').trim() || 'needs_verification',
+      last_verified_at: String(offer.last_verified_at || '').trim()
     };
   }).filter(Boolean);
 }
@@ -258,13 +267,15 @@ function offerStatements(productId, primary, additional) {
     return {
       sql: `INSERT INTO product_offers
         (id, product_id, marketplace, marketplace_slug, store_name, price, mrp, discount,
-         product_url, affiliate_url, availability, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         product_url, affiliate_url, availability, variant_info, data_source,
+         verification_status, last_verified_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       values: [
         `offer-${randomHex(6)}`, productId, offer.marketplace,
         offer.marketplace.toLowerCase().replaceAll(' ', '-'), offer.store_name || '',
         offer.price, offer.mrp, discount, offer.product_url, offer.affiliate_url || '',
-        offer.availability || 'In Stock', timestamp
+        offer.availability || 'In Stock', offer.variant_info || '', offer.data_source || 'manual',
+        offer.verification_status || 'needs_verification', offer.last_verified_at || '', timestamp
       ]
     };
   });
@@ -355,14 +366,34 @@ async function listProducts(request, env, db, admin) {
     response.stats = Object.fromEntries(
       ['total', 'published', 'drafts', 'featured', 'best_value'].map((key) => [key, stats[key] || 0])
     );
-    response.categories = (await db.prepare(
+    const storedCategories = (await db.prepare(
       "SELECT DISTINCT category FROM products WHERE category != '' ORDER BY category COLLATE NOCASE"
     ).all()).results.map((row) => row.category);
-    response.marketplaces = (await db.prepare(
+    response.categories = Array.from(new Set([...DEFAULT_CATEGORIES, ...storedCategories]))
+      .sort((left, right) => left.localeCompare(right));
+    const storedMarketplaces = (await db.prepare(
       "SELECT DISTINCT marketplace FROM product_offers WHERE marketplace != '' ORDER BY marketplace COLLATE NOCASE"
     ).all()).results.map((row) => row.marketplace);
+    response.marketplaces = Array.from(new Set([...DEFAULT_MARKETPLACES, ...storedMarketplaces]))
+      .sort((left, right) => left.localeCompare(right));
   }
   return json(response);
+}
+
+async function recordAffiliateClick(body, db) {
+  const productId = String(body.product_id || '').trim();
+  const offerId = String(body.offer_id || '').trim();
+  if (!productId || !offerId) return error('Product and offer are required');
+  const offer = await db.prepare(`
+    SELECT product_id, marketplace FROM product_offers
+    WHERE id=? AND product_id=? AND affiliate_url != ''
+  `).bind(offerId, productId).first();
+  if (!offer) return error('Affiliate offer not found', 404);
+  await db.prepare(`
+    INSERT INTO affiliate_clicks (id, product_id, offer_id, marketplace, clicked_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).bind(`click-${randomHex(10)}`, productId, offerId, offer.marketplace, now()).run();
+  return json({ success: true });
 }
 
 async function addProduct(body, env, db, admin) {
@@ -371,6 +402,21 @@ async function addProduct(body, env, db, admin) {
   const category = String(body.category || '').trim();
   const subcategory = String(body.subcategory || '').trim();
   const description = String(body.description || '').trim();
+  const shortDescription = String(body.short_description || '').trim();
+  const detailedDescription = String(body.detailed_description || description).trim();
+  const keyFeatures = Array.isArray(body.key_features) ? body.key_features : [];
+  const specifications = body.specifications && typeof body.specifications === 'object' && !Array.isArray(body.specifications) ? body.specifications : {};
+  const modelNumber = String(body.model_number || '').trim();
+  const variants = Array.isArray(body.variants) ? body.variants : [];
+  const color = String(body.color || '').trim();
+  const size = String(body.size || '').trim();
+  const material = String(body.material || '').trim();
+  const weight = String(body.weight || '').trim();
+  const dimensions = String(body.dimensions || '').trim();
+  const manufacturer = String(body.manufacturer || '').trim();
+  const countryOfOrigin = String(body.country_of_origin || '').trim();
+  const productVideoUrl = validateWebUrl(body.product_video_url, 'Product video URL', false);
+  const warrantyInfo = String(body.warranty_info || '').trim();
   const image = validateImageReference(body.image);
   const additionalImages = body.additional_images || [];
   const marketplace = String(body.marketplace || '').trim();
@@ -409,13 +455,23 @@ async function addProduct(body, env, db, admin) {
   const discount = mrp > 0 && sellingPrice <= mrp ? Math.round(((mrp - sellingPrice) / mrp) * 100) : 0;
   const statements = [{
     sql: `INSERT INTO products (
-      id, product_code, name, brand, category, subcategory, description, image, additional_images,
+      id, product_code, name, brand, category, subcategory, description, short_description,
+      detailed_description, key_features, specifications, model_number, variants, color, size,
+      material, weight, dimensions, manufacturer, country_of_origin, product_video_url, warranty_info,
+      image, additional_images,
       mrp, selling_price, discount, marketplace, product_url, rating, review_count, availability,
       stock_status, featured, best_value, status, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?, ?, ?
+    )`,
     values: [
-      productId, productCode, name, brand, category, subcategory, description, image,
-      JSON.stringify(parsedImages), mrp, sellingPrice, discount, marketplace, productUrl,
+      productId, productCode, name, brand, category, subcategory, description, shortDescription,
+      detailedDescription, JSON.stringify(keyFeatures), JSON.stringify(specifications), modelNumber,
+      JSON.stringify(variants), color, size, material, weight, dimensions, manufacturer, countryOfOrigin,
+      productVideoUrl, warrantyInfo, image, JSON.stringify(parsedImages), mrp, sellingPrice, discount, marketplace, productUrl,
       rating, reviewCount, availability, stockStatus, featured, bestValue, status, timestamp, timestamp
     ]
   }];
@@ -451,6 +507,22 @@ async function updateProduct(productId, body, env, db, admin) {
   const category = String(body.category ?? existing.category).trim();
   const subcategory = String(body.subcategory ?? existing.subcategory).trim();
   const description = String(body.description ?? existing.description).trim();
+  const shortDescription = String(body.short_description ?? existing.short_description ?? '').trim();
+  const detailedDescription = String(body.detailed_description ?? existing.detailed_description ?? description).trim();
+  const keyFeatures = Array.isArray(body.key_features) ? body.key_features : JSON.parse(existing.key_features || '[]');
+  const specifications = body.specifications && typeof body.specifications === 'object' && !Array.isArray(body.specifications)
+    ? body.specifications : JSON.parse(existing.specifications || '{}');
+  const modelNumber = String(body.model_number ?? existing.model_number ?? '').trim();
+  const variants = Array.isArray(body.variants) ? body.variants : JSON.parse(existing.variants || '[]');
+  const color = String(body.color ?? existing.color ?? '').trim();
+  const size = String(body.size ?? existing.size ?? '').trim();
+  const material = String(body.material ?? existing.material ?? '').trim();
+  const weight = String(body.weight ?? existing.weight ?? '').trim();
+  const dimensions = String(body.dimensions ?? existing.dimensions ?? '').trim();
+  const manufacturer = String(body.manufacturer ?? existing.manufacturer ?? '').trim();
+  const countryOfOrigin = String(body.country_of_origin ?? existing.country_of_origin ?? '').trim();
+  const productVideoUrl = validateWebUrl(body.product_video_url ?? existing.product_video_url, 'Product video URL', false);
+  const warrantyInfo = String(body.warranty_info ?? existing.warranty_info ?? '').trim();
   const image = validateImageReference(body.image ?? existing.image);
   const additionalImages = body.additional_images ?? JSON.parse(existing.additional_images || '[]');
   if (!Array.isArray(additionalImages)) throw new Error('Additional images must be a list of image URLs');
@@ -476,12 +548,17 @@ async function updateProduct(productId, body, env, db, admin) {
   const bestValue = truthy(body.best_value ?? existing.best_value) ? 1 : 0;
   const discount = sellingPrice <= mrp ? Math.round(((mrp - sellingPrice) / mrp) * 100) : 0;
   const statements = [{
-    sql: `UPDATE products SET name=?, brand=?, category=?, subcategory=?, description=?, image=?,
+    sql: `UPDATE products SET name=?, brand=?, category=?, subcategory=?, description=?, short_description=?,
+      detailed_description=?, key_features=?, specifications=?, model_number=?, variants=?, color=?, size=?,
+      material=?, weight=?, dimensions=?, manufacturer=?, country_of_origin=?, product_video_url=?, warranty_info=?, image=?,
       additional_images=?, mrp=?, selling_price=?, discount=?, marketplace=?, product_url=?,
       rating=?, review_count=?, availability=?, stock_status=?, featured=?, best_value=?, status=?, updated_at=?
       WHERE id=?`,
     values: [
-      name, brand, category, subcategory, description, image, JSON.stringify(parsedImages), mrp,
+      name, brand, category, subcategory, description, shortDescription, detailedDescription,
+      JSON.stringify(keyFeatures), JSON.stringify(specifications), modelNumber, JSON.stringify(variants), color, size,
+      material, weight, dimensions, manufacturer, countryOfOrigin, productVideoUrl, warrantyInfo, image,
+      JSON.stringify(parsedImages), mrp,
       sellingPrice, discount, marketplace, productUrl, rating, reviewCount, availability,
       stockStatus, featured, bestValue, status, now(), productId
     ]
@@ -642,6 +719,15 @@ async function handleGet(request, env, db, route, url) {
       limit, offset
     });
   }
+  if (route === 'admin/affiliate-clicks') {
+    if (!await adminSession(request, db)) return error('Unauthorized', 401);
+    const result = await db.prepare(`
+      SELECT marketplace, product_id, COUNT(*) AS clicks, MAX(clicked_at) AS last_clicked_at
+      FROM affiliate_clicks GROUP BY marketplace, product_id
+      ORDER BY clicks DESC, last_clicked_at DESC
+    `).all();
+    return json({ clicks: result.results || [] });
+  }
   if (route === 'products') return listProducts(request, env, db, await adminSession(request, db));
   if (route.startsWith('products/')) {
     const productId = decodeURIComponent(route.slice('products/'.length));
@@ -746,6 +832,7 @@ async function handlePost(request, env, db, route) {
       'Set-Cookie': cookieHeader(SESSION_COOKIE, token, 604800)
     });
   }
+  if (route === 'affiliate-click') return recordAffiliateClick(body, db);
   if (route === 'admin/logout') {
     const token = cookieValue(request, SESSION_COOKIE);
     if (token) await db.prepare('DELETE FROM admin_sessions WHERE token_hash=?').bind(await digest(token)).run();

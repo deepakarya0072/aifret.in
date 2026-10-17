@@ -61,7 +61,23 @@ async function fetchProductsFromApi() {
 }
 
 function formatPrice(value) {
-  return currency.format(Number(value) || 0);
+  return Number.isFinite(Number(value)) && Number(value) > 0 ? currency.format(Number(value)) : 'Price unavailable';
+}
+
+function offerPriceLabel(offer) {
+  if (!offer || !Number.isFinite(offer.price) || offer.price <= 0) return 'Price unavailable';
+  if (offer.verificationStatus !== 'verified') return `${formatPrice(offer.price)} · Price needs verification`;
+  return formatPrice(offer.price);
+}
+
+function trackAffiliateClick(offer, productId) {
+  if (!offer?.buyUrl || !productId) return;
+  fetch('/api/affiliate-click', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ product_id: productId, offer_id: offer.id })
+  }).catch(() => {});
 }
 
 function getQueryParam(name) {
@@ -121,13 +137,17 @@ function normalizeProduct(product) {
       ...entry,
       marketplaceSlug: marketSlug,
       marketplace: entry.store_name || entry.storeName || marketName,
-      price: Number(entry.price) || Number(product.selling_price ?? product.price),
-      originalPrice: Number(entry.mrp ?? entry.originalPrice ?? product.mrp ?? product.originalPrice),
-      discount: Number(entry.discount ?? product.discount),
+      price: Number.isFinite(Number(entry.price)) && Number(entry.price) > 0 ? Number(entry.price) : null,
+      originalPrice: Number.isFinite(Number(entry.mrp ?? entry.originalPrice ?? product.mrp ?? product.originalPrice))
+        ? Number(entry.mrp ?? entry.originalPrice ?? product.mrp ?? product.originalPrice) : null,
+      discount: Number.isFinite(Number(entry.discount)) ? Number(entry.discount) : null,
       url: offerUrl,
       buyUrl: isValidAffiliateUrl(entry.affiliate_url || entry.affiliateUrl) ? (entry.affiliate_url || entry.affiliateUrl) : '',
       affiliateConfigured: isValidAffiliateUrl(entry.affiliate_url || entry.affiliateUrl),
-      availability: entry.availability || 'In Stock'
+      availability: entry.availability || 'Price needs verification',
+      verificationStatus: entry.verification_status || 'needs_verification',
+      lastVerifiedAt: entry.last_verified_at || '',
+      dataSource: entry.data_source || 'manual'
     };
   });
 
@@ -146,9 +166,9 @@ function normalizeProduct(product) {
     image: product.image || product.productImage || '',
     additional_images: Array.isArray(product.additional_images) ? product.additional_images : [],
     productImage: product.image || product.productImage || '',
-    price: Number(product.selling_price ?? product.price),
+    price: Number.isFinite(Number(product.selling_price ?? product.price)) ? Number(product.selling_price ?? product.price) : null,
     selling_price: Number(product.selling_price ?? product.price),
-    originalPrice: Number(product.mrp ?? product.originalPrice),
+    originalPrice: Number.isFinite(Number(product.mrp ?? product.originalPrice)) ? Number(product.mrp ?? product.originalPrice) : null,
     mrp: Number(product.mrp ?? product.originalPrice),
     currentPrice: Number(product.selling_price ?? product.price),
     oldPrice: Number(product.mrp ?? product.originalPrice),
@@ -168,12 +188,14 @@ function normalizeProduct(product) {
 
 function getBestOffer(product) {
   const normalized = normalizeProduct(product);
-  const sorted = [...normalized.comparison].sort((a, b) => a.price - b.price);
+  const sorted = normalized.comparison
+    .filter((offer) => offer.verificationStatus === 'verified' && Number.isFinite(offer.price) && offer.price > 0)
+    .sort((a, b) => a.price - b.price);
   return sorted[0] || {
     marketplace: normalized.marketplace || 'Amazon',
     marketplaceSlug: (normalized.marketplace || 'amazon').toLowerCase().replace(/\s+/g, '-'),
-    price: normalized.price,
-    discount: normalized.discount,
+    price: null,
+    discount: null,
     url: normalized.product_url || '#',
     buyUrl: ''
   };
@@ -521,9 +543,9 @@ function renderProductDetail() {
         <div class="deal-market">Available on <strong>${selectedOffer.marketplace}</strong></div>
 
         <div class="price-raised">
-          <strong>${formatPrice(selectedOffer.price)}</strong>
-          <span class="old-price">${formatPrice(selectedOffer.originalPrice || product.originalPrice)}</span>
-          <span class="discount-pill-large">Save ${selectedOffer.discount}%</span>
+          <strong>${offerPriceLabel(selectedOffer)}</strong>
+          ${selectedOffer.originalPrice ? `<span class="old-price">${formatPrice(selectedOffer.originalPrice)}</span>` : ''}
+          ${selectedOffer.discount !== null ? `<span class="discount-pill-large">Save ${selectedOffer.discount}%</span>` : ''}
         </div>
 
         <p class="product-summary">${product.description || 'Lightweight, durable, and packed with features. Compare prices below across trusted stores to get the best deal.'}</p>
@@ -540,7 +562,7 @@ function renderProductDetail() {
         </div>
 
         <div class="product-actions">
-          <a href="${selectedOffer.url}" class="btn btn-primary" target="_blank" rel="noopener noreferrer">View Deal</a>
+          ${selectedOffer.buyUrl ? `<a href="${selectedOffer.buyUrl}" class="btn btn-primary" target="_blank" rel="noopener noreferrer" data-affiliate-buy data-product-id="${product.id}" data-offer-id="${selectedOffer.id || ''}">Buy Now</a>` : '<span class="btn btn-secondary" aria-disabled="true">Affiliate link unavailable</span>'}
           <a href="deals.html" class="btn btn-secondary">See More Deals</a>
         </div>
       </div>
@@ -565,10 +587,10 @@ function renderProductDetail() {
         ${product.comparison.map((entry) => `
           <div class="compare-table-row" role="row">
             <strong>${entry.marketplace}</strong>
-            <span style="font-weight: 700; color: var(--text);">${formatPrice(entry.price)}</span>
-            <span class="discount-badge">-${entry.discount}%</span>
-            <span>${entry.availability || 'In Stock'}</span>
-            <a class="btn btn-primary btn-small" href="${entry.url}" target="_blank" rel="noopener noreferrer">View Deal</a>
+              <span style="font-weight: 700; color: var(--text);">${offerPriceLabel(entry)}</span>
+              <span>${entry.discount !== null ? `<span class="discount-badge">-${entry.discount}%</span>` : '—'}</span>
+              <span>${entry.verificationStatus === 'verified' ? (entry.availability || 'Availability needs verification') : 'Price needs verification'}</span>
+              ${entry.buyUrl ? `<a class="btn btn-primary btn-small" href="${entry.buyUrl}" target="_blank" rel="noopener noreferrer" data-affiliate-buy data-product-id="${product.id}" data-offer-id="${entry.id || ''}">Buy Now</a>` : '<span class="btn btn-secondary btn-small" aria-disabled="true">Link unavailable</span>'}
           </div>
         `).join('')}
       </div>
@@ -897,10 +919,10 @@ function renderComparePage() {
           ${offers.map((entry) => `
             <div class="compare-table-row" role="row">
               <strong>${entry.marketplace}</strong>
-              <span style="font-weight: 700; color: var(--text);">${formatPrice(entry.price)}</span>
-              <span class="discount-badge">-${entry.discount}%</span>
-              <span>${entry.availability || 'In Stock'}</span>
-              <a class="btn btn-primary btn-small" href="${entry.url}" target="_blank" rel="noopener noreferrer">View Deal</a>
+              <span style="font-weight: 700; color: var(--text);">${offerPriceLabel(entry)}</span>
+              <span>${entry.discount !== null ? `<span class="discount-badge">-${entry.discount}%</span>` : '—'}</span>
+              <span>${entry.verificationStatus === 'verified' ? (entry.availability || 'Availability needs verification') : 'Price needs verification'}</span>
+              ${entry.buyUrl ? `<a class="btn btn-primary btn-small" href="${entry.buyUrl}" target="_blank" rel="noopener noreferrer" data-affiliate-buy data-product-id="${product.id}" data-offer-id="${entry.id || ''}">Buy Now</a>` : '<span class="btn btn-secondary btn-small" aria-disabled="true">Link unavailable</span>'}
             </div>
           `).join('')}
         </div>
@@ -1006,6 +1028,12 @@ function initializePage() {
   // Asynchronously fetch fresh data from database API
   fetchProductsFromApi();
 }
+
+document.addEventListener('click', (event) => {
+  const link = event.target.closest('[data-affiliate-buy]');
+  if (!link) return;
+  trackAffiliateClick({ buyUrl: link.href, id: link.dataset.offerId }, link.dataset.productId);
+});
 
 window.addEventListener('storage', (event) => {
   if (event.key !== PRODUCTS_STORAGE_KEY) return;
