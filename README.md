@@ -40,6 +40,16 @@ The production API runs on the same origin as the static site; no localhost or s
 1. In Cloudflare **Workers & Pages**, open the project that serves `aifret.in`. Confirm it is connected to this GitHub repository and deploys the intended branch. If there is no Pages project, create one from this repository. Use the repository root, no build command, and `.` as the build output directory. Pages Functions must be deployed through the Git integration or Wrangler; a static drag-and-drop upload does not deploy the `functions/` code.
 2. Create a D1 database. In its SQL console, execute the contents of [`migrations/0001_cloudflare_schema.sql`](./migrations/0001_cloudflare_schema.sql).
 3. In the Pages project settings, add a D1 binding named `AIFRET_DB` and select that database.
+
+For an authenticated Wrangler session, apply the production schema with:
+
+```powershell
+npx wrangler d1 list
+npx wrangler d1 execute <database-name> --remote --file=migrations/0001_cloudflare_schema.sql
+npx wrangler d1 execute <database-name> --remote --command="SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
+```
+
+Use the exact database name returned by `wrangler d1 list`; do not substitute the Pages binding name unless it is also the D1 database name.
 4. Create an R2 bucket, then add an R2 binding named `AIFRET_IMAGES` to the Pages project. Product image uploads and customer try-on photos use this bucket.
 5. Add `AIFRET_ADMIN_USERNAME` and `AIFRET_ADMIN_PASSWORD` as encrypted production secrets in Pages settings. Choose a unique, strong password; do not reuse a password shared in chat or store either value in the repository. The first successful admin login creates the production admin when D1 contains no admin user. Changing the secrets later does not change an existing database account.
 
