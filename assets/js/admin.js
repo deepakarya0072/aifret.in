@@ -18,6 +18,13 @@ const DEFAULT_ADMIN_CATEGORIES = [
   'Home & Kitchen', 'Watches'
 ];
 const DEFAULT_ADMIN_MARKETPLACES = ['Amazon', 'Flipkart', 'Meesho', 'Myntra', 'Other Stores'];
+const IMPORT_FIELD_LABELS = {
+  name: 'product name', brand: 'brand', description: 'description', category: 'category',
+  subcategory: 'subcategory', image: 'main image', price: 'selling price', mrp: 'MRP', currency: 'currency',
+  discount: 'discount', availability: 'availability', product_id: 'marketplace product ID',
+  model_number: 'model number', additional_images: 'additional images', key_features: 'key features',
+  specifications: 'specifications', variants: 'variants'
+};
 
 const currency = new Intl.NumberFormat('en-IN', {
   style: 'currency',
@@ -211,6 +218,110 @@ function populateFilterDropdowns(categories = [], marketplaces = []) {
   ).join('');
 }
 
+function setImportStatus(message, tone = 'muted') {
+  const status = document.querySelector('[data-import-status]');
+  if (!status) return;
+  status.textContent = message || '';
+  status.style.color = tone === 'danger' ? 'var(--danger)' : tone === 'success' ? 'var(--success)' : 'var(--muted)';
+}
+
+function formatImportedLines(value) {
+  if (Array.isArray(value)) return value.filter(Boolean).join('\n');
+  return typeof value === 'string' ? value : '';
+}
+
+function formatImportedSpecifications(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+  return Object.entries(value).map(([key, item]) => `${key}: ${item}`).join('\n');
+}
+
+function fillImportedProduct(product, sourceUrl, marketplace) {
+  const form = document.querySelector('[data-admin-form]');
+  const set = (name, value) => {
+    if (value !== undefined && value !== null && value !== '') form.elements[name].value = value;
+  };
+  set('marketplace', marketplace);
+  set('product_url', sourceUrl);
+  set('affiliate_url', sourceUrl);
+  set('name', product.name);
+  set('brand', product.brand);
+  set('category', product.category);
+  set('subcategory', product.subcategory);
+  set('description', product.description);
+  set('short_description', product.short_description);
+  set('detailed_description', product.description);
+  set('model_number', product.model_number);
+  set('manufacturer', product.manufacturer);
+  set('color', product.color);
+  set('size', product.size);
+  set('material', product.material);
+  set('weight', product.weight);
+  set('dimensions', product.dimensions);
+  set('country_of_origin', product.country_of_origin);
+  set('availability', product.availability);
+  set('imageUrl', product.image);
+  set('mrp', product.mrp);
+  set('discount', product.discount);
+  set('selling_price', product.price);
+  set('currency', product.currency);
+  set('key_features', formatImportedLines(product.key_features));
+  set('specifications', formatImportedSpecifications(product.specifications));
+  set('variants', formatImportedLines(product.variants));
+  if (product.image) {
+    selectedMainImage = product.image;
+    const preview = document.querySelector('[data-admin-image-preview]');
+    preview.src = product.image;
+    preview.hidden = false;
+  }
+  additionalImagesList = Array.isArray(product.additional_images) ? product.additional_images.filter(Boolean) : [];
+  form.elements.additionalImagesUrls.value = additionalImagesList.join(', ');
+  renderExtraPreviews();
+  document.querySelector('[data-import-preview]').hidden = false;
+  updateDiscountCalculation();
+  if (product.price !== undefined && product.price !== null && product.price !== '') form.elements.selling_price.value = product.price;
+  document.getElementById('product-form-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+async function handleImportFetch() {
+  const urlInput = document.querySelector('[data-import-url]');
+  const button = document.querySelector('[data-import-fetch]');
+  const sourceUrl = urlInput.value.trim();
+  if (!sourceUrl) {
+    setImportStatus('Paste an HTTPS marketplace or affiliate URL first.', 'danger');
+    return;
+  }
+  button.disabled = true;
+  setImportStatus('Checking marketplace and authorized provider access...', 'muted');
+  try {
+    const response = await adminFetch('/api/admin/import-preview', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: sourceUrl })
+    });
+    const data = await response.json();
+    if (data.marketplace && data.source_url) {
+      const missing = (data.missing_fields || []).map((field) => IMPORT_FIELD_LABELS[field] || field);
+      const provider = document.querySelector('[data-import-provider]');
+      const fields = document.querySelector('[data-import-fields]');
+      provider.textContent = `${data.marketplace}${data.ready ? ' · Authorized data received' : ' · Manual fallback'}`;
+      fields.textContent = missing.length ? `Unavailable or needs review: ${missing.join(', ')}.` : 'All mapped fields were returned; review before saving.';
+      document.querySelector('[data-import-preview]').hidden = false;
+    }
+    if (data.ready) {
+      fillImportedProduct(data, data.source_url, data.marketplace);
+      setImportStatus(data.duplicates?.length
+        ? `Details fetched, but this URL already matches ${data.duplicates.length} catalog record(s). Review duplicates before saving.`
+        : (data.message || 'Details fetched. Review and save as Draft or Publish.'), data.duplicates?.length ? 'danger' : 'success');
+    } else {
+      if (data.source_url && data.marketplace) fillImportedProduct(data, data.source_url, data.marketplace);
+      setImportStatus(data.message || 'Authorized API data is unavailable. Manual entry is still available.', 'danger');
+    }
+  } catch (error) {
+    setImportStatus(error.message || 'Product import failed. Manual entry is still available.', 'danger');
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function parseLineList(value) {
   return String(value || '').split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean);
 }
@@ -362,6 +473,9 @@ function createOfferRow(offer = {}) {
         <label>Offer MRP (₹)
           <input type="number" min="0" step="1" data-offer-mrp value="${mrp}" placeholder="e.g. 3999" />
         </label>
+        <label>Currency
+          <input type="text" maxlength="3" pattern="[A-Za-z]{3}" data-offer-currency value="${escapeHtml(offer.currency || 'INR')}" placeholder="INR" />
+        </label>
         <label class="admin-full">Product Deal URL *
           <input type="url" data-offer-url value="${escapeHtml(url)}" placeholder="https://www.store.com/item" required />
         </label>
@@ -391,6 +505,7 @@ function collectOffers() {
       marketplace: row.querySelector('[data-offer-marketplace]').value,
       store_name: row.querySelector('[data-offer-store-name]').value.trim(),
       price: price,
+      currency: (row.querySelector('[data-offer-currency]').value.trim() || 'INR').toUpperCase(),
       mrp: mrp,
       discount: disc,
       product_url: row.querySelector('[data-offer-url]').value.trim(),
@@ -536,6 +651,7 @@ function populateFormForEdit(product) {
   form.elements.marketplace.value = product.marketplace || 'Amazon';
   form.elements.mrp.value = product.mrp || '';
   form.elements.selling_price.value = product.selling_price || '';
+  form.elements.currency.value = product.currency || 'INR';
   form.elements.discount.value = product.discount ?? 0;
   form.elements.product_url.value = product.product_url || '';
   const primaryOffer = (product.offers || []).find((offer) =>
@@ -667,6 +783,7 @@ async function handleProductSubmit(event) {
     marketplace,
     mrp,
     selling_price,
+    currency: (form.elements.currency.value.trim() || 'INR').toUpperCase(),
     product_url,
     affiliate_url: form.elements.affiliate_url.value.trim(),
     image: imageUrl,
@@ -838,6 +955,14 @@ document.addEventListener('DOMContentLoaded', () => {
     resetProductForm();
     document.getElementById('product-form-panel').scrollIntoView({ behavior: 'smooth' });
     document.querySelector('[data-admin-form] [name="name"]').focus({ preventScroll: true });
+  });
+
+  document.querySelector('[data-import-fetch]').addEventListener('click', handleImportFetch);
+  document.querySelector('[data-import-url]').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      handleImportFetch();
+    }
   });
 
   // Discount calculation listeners

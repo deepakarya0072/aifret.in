@@ -178,6 +178,26 @@ class ProductManagementApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 401)
 
+    def test_affiliate_import_requires_admin_and_keeps_manual_fallback(self):
+        public_client = urllib.request.build_opener()
+        status, response = self.request_json(
+            "/api/admin/import-preview",
+            {"url": "https://www.amazon.in/dp/example?tag=aifret-21"},
+            "POST",
+            client=public_client
+        )
+        self.assertEqual(status, 401)
+
+        status, response = self.request_json(
+            "/api/admin/import-preview",
+            {"url": "https://www.amazon.in/dp/example?tag=aifret-21"},
+            "POST"
+        )
+        self.assertEqual(status, 424)
+        self.assertFalse(response["ready"])
+        self.assertEqual(response["affiliate_url"], "https://www.amazon.in/dp/example?tag=aifret-21")
+        self.assertTrue(response["manual_fallback"])
+
     def test_admin_session_persists_and_logout_invalidates_it(self):
         status, session = self.request_json("/api/admin/session")
         self.assertEqual(status, 200)

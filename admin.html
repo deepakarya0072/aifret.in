@@ -57,6 +57,27 @@
         </div>
       </div>
 
+      <section class="admin-panel admin-import-panel" aria-labelledby="affiliate-import-heading">
+        <div class="admin-panel-heading">
+          <div>
+            <span class="section-kicker">Authorized Import</span>
+            <h2 id="affiliate-import-heading">Import Product by Affiliate URL</h2>
+            <p>Paste an HTTPS product or affiliate URL. AIFRET uses only configured authorized provider APIs; if access is unavailable, complete the same form manually.</p>
+          </div>
+        </div>
+        <div class="admin-import-controls">
+          <label class="admin-full">Affiliate or marketplace product URL
+            <input type="url" data-import-url placeholder="https://www.amazon.in/dp/..." autocomplete="off" />
+          </label>
+          <button type="button" class="btn btn-primary" data-import-fetch>Fetch Product Details</button>
+        </div>
+        <p class="auth-status" data-import-status role="status" aria-live="polite"></p>
+        <div class="admin-import-preview" data-import-preview hidden>
+          <strong data-import-provider></strong>
+          <span data-import-fields></span>
+        </div>
+      </section>
+
       <!-- Quick Catalog Counters -->
       <div class="admin-stats-grid">
         <div class="admin-stat-card">
@@ -148,12 +169,15 @@
 
               <!-- Field 10: Selling Price -->
               <label>Selling Price (₹) *
-                <input name="selling_price" type="number" min="0" step="1" required readonly placeholder="Calculated from MRP and discount" data-calc-price style="background: var(--bg-soft); font-weight: 700;" />
+                <input name="selling_price" type="number" min="0" step="1" required placeholder="Enter current selling price" data-calc-price style="background: var(--bg-soft); font-weight: 700;" />
               </label>
 
               <!-- Field 11: Discount -->
               <label>Discount Percentage *
                 <input name="discount" type="number" min="0" max="100" step="1" required placeholder="e.g. 25" data-calc-discount />
+              </label>
+              <label>Currency
+                <input name="currency" type="text" value="INR" maxlength="3" pattern="[A-Za-z]{3}" placeholder="INR" />
               </label>
 
               <!-- Field 13: Marketplace Product URL -->

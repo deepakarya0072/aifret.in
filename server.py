@@ -23,6 +23,8 @@ import math
 from datetime import datetime, timedelta
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 
+from affiliate_import import detect_marketplace, fetch_authorized_product, validate_import_url, ImportErrorBase
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.environ.get("AIFRET_DATA_DIR", os.path.join(BASE_DIR, "data"))
 UPLOADS_DIR = os.environ.get("AIFRET_UPLOADS_DIR", os.path.join(BASE_DIR, "uploads"))
@@ -234,6 +236,7 @@ def init_database():
         additional_images TEXT DEFAULT '[]',
         mrp REAL NOT NULL,
         selling_price REAL NOT NULL,
+        currency TEXT NOT NULL DEFAULT 'INR',
         discount REAL NOT NULL,
         marketplace TEXT NOT NULL,
         product_url TEXT NOT NULL,
@@ -258,6 +261,7 @@ def init_database():
         marketplace_slug TEXT DEFAULT '',
         store_name TEXT DEFAULT '',
         price REAL NOT NULL,
+        currency TEXT NOT NULL DEFAULT 'INR',
         mrp REAL DEFAULT 0.0,
         discount REAL DEFAULT 0.0,
         product_url TEXT NOT NULL,
@@ -419,7 +423,7 @@ def init_database():
         'color': "TEXT DEFAULT ''", 'size': "TEXT DEFAULT ''", 'material': "TEXT DEFAULT ''",
         'weight': "TEXT DEFAULT ''", 'dimensions': "TEXT DEFAULT ''", 'manufacturer': "TEXT DEFAULT ''",
         'country_of_origin': "TEXT DEFAULT ''", 'product_video_url': "TEXT DEFAULT ''",
-        'warranty_info': "TEXT DEFAULT ''"
+        'warranty_info': "TEXT DEFAULT ''", 'currency': "TEXT NOT NULL DEFAULT 'INR'"
     }
     for column, definition in product_additions.items():
         if column not in product_columns:
@@ -427,7 +431,8 @@ def init_database():
     offer_columns = {row['name'] for row in cursor.execute("PRAGMA table_info(product_offers)").fetchall()}
     for column, definition in {
         'variant_info': "TEXT DEFAULT ''", 'data_source': "TEXT DEFAULT 'manual'",
-        'verification_status': "TEXT DEFAULT 'needs_verification'", 'last_verified_at': "TEXT DEFAULT ''"
+        'verification_status': "TEXT DEFAULT 'needs_verification'", 'last_verified_at': "TEXT DEFAULT ''",
+        'currency': "TEXT NOT NULL DEFAULT 'INR'"
     }.items():
         if column not in offer_columns:
             cursor.execute(f"ALTER TABLE product_offers ADD COLUMN {column} {definition}")
@@ -1359,12 +1364,81 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
             self.handle_image_upload()
             return
 
-        # 11. Add Product
+        # 11. Authorized affiliate URL import preview
+        if path == '/api/admin/import-preview':
+            self.handle_import_preview()
+            return
+
+        # 12. Add Product
         if path == '/api/products':
             self.handle_add_product()
             return
 
         self.send_error_json("Not Found", status=404)
+
+    def handle_import_preview(self):
+        if not self.authenticate_admin():
+            self.send_error_json("Unauthorized", status=401)
+            return
+        body = self.get_json_body()
+        if not body:
+            self.send_error_json("Invalid JSON body")
+            return
+        try:
+            source_url = validate_import_url(body.get('url', ''))
+            marketplace, host = detect_marketplace(source_url)
+        except ImportErrorBase as error:
+            self.send_error_json(str(error), status=422)
+            return
+
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, name, status, product_url AS matched_url FROM products WHERE product_url = ?
+            UNION ALL
+            SELECT p.id, p.name, p.status, o.product_url AS matched_url
+            FROM product_offers o JOIN products p ON p.id = o.product_id
+            WHERE o.product_url = ? OR o.affiliate_url = ?
+            LIMIT 5
+        """, (source_url, source_url, source_url))
+        duplicates = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+
+        try:
+            preview = fetch_authorized_product(source_url, marketplace)
+        except ImportErrorBase as error:
+            self.send_json({
+                "success": False,
+                "ready": False,
+                "marketplace": marketplace,
+                "host": host,
+                "source_url": source_url,
+                "affiliate_url": source_url,
+                "duplicates": duplicates,
+                "message": str(error),
+                "manual_fallback": True,
+            }, status=424)
+            return
+
+        if not preview.get('ready'):
+            self.send_json({
+                "success": False,
+                **preview,
+                "host": host,
+                "duplicates": duplicates,
+                "message": preview.get('provider', {}).get('message', 'Manual entry is available.'),
+                "manual_fallback": True,
+            }, status=424)
+            return
+
+        preview['host'] = host
+        preview['duplicates'] = duplicates
+        preview['manual_fallback'] = True
+        preview['message'] = (
+            'Product details fetched. Review every field before saving.'
+            if preview.get('ready') else preview.get('provider', {}).get('message', 'Manual entry is available.')
+        )
+        self.send_json({"success": True, **preview})
 
     def handle_admin_login(self):
         body = self.get_json_body()
@@ -1928,6 +2002,9 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
             image = validate_image_reference(body.get('image', ''))
             additional_images = body.get('additional_images', [])
             marketplace = str(body.get('marketplace', '')).strip()
+            currency = str(body.get('currency', 'INR')).strip().upper() or 'INR'
+            if len(currency) != 3 or not currency.isalpha():
+                raise ValueError("Currency must be a 3-letter ISO code")
             product_url = validate_web_url(body.get('product_url', ''), "Marketplace product URL")
             affiliate_url = validate_affiliate_url(body.get('affiliate_url', ''), "Affiliate URL", product_url)
             availability = str(body.get('availability', 'In Stock')).strip()
@@ -1969,10 +2046,14 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
                 if not math.isfinite(off_price) or not math.isfinite(off_mrp) or off_price <= 0 or off_mrp < 0:
                     raise ValueError(f"Enter valid prices for the {off_market} offer")
                 off_url = validate_web_url(offer.get('product_url', ''), f"{off_market} product URL")
+                off_currency = str(offer.get('currency', currency)).strip().upper() or currency
+                if len(off_currency) != 3 or not off_currency.isalpha():
+                    raise ValueError(f"Currency for the {off_market} offer must be a 3-letter ISO code")
                 validated_offers.append({
                     'marketplace': off_market,
                     'store_name': str(offer.get('store_name', '')).strip(),
                     'price': off_price,
+                    'currency': off_currency,
                     'mrp': off_mrp,
                     'product_url': off_url,
                     'affiliate_url': validate_affiliate_url(offer.get('affiliate_url', ''), f"{off_market} affiliate URL", off_url),
@@ -2015,20 +2096,20 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
                     detailed_description, key_features, specifications, model_number, variants, color, size,
                     material, weight, dimensions, manufacturer, country_of_origin, product_video_url, warranty_info,
                     image, additional_images,
-                    mrp, selling_price, discount, marketplace, product_url, rating, review_count,
+                    mrp, selling_price, currency, discount, marketplace, product_url, rating, review_count,
                     availability, stock_status, featured, best_value, status, created_at, updated_at
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
             """, (
                 product_id, product_code, name, brand, category, subcategory, description, short_description,
                 detailed_description, json.dumps(key_features), json.dumps(specifications), model_number,
                 json.dumps(variants), color, size, material, weight, dimensions, manufacturer,
                 country_of_origin, product_video_url, warranty_info, image,
-                json.dumps(additional_images), mrp, selling_price, discount, marketplace,
+                    json.dumps(additional_images), mrp, selling_price, currency, discount, marketplace,
                 product_url, rating, review_count, availability, stock_status,
                 featured, best_value, status, now, now
             ))
@@ -2037,6 +2118,7 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
                 'marketplace': marketplace,
                 'store_name': '',
                 'price': selling_price,
+                'currency': currency,
                 'mrp': mrp,
                 'product_url': product_url,
                 'affiliate_url': affiliate_url,
@@ -2052,14 +2134,14 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
                 off_disc = round(((off_mrp - off_price) / off_mrp) * 100) if off_mrp > 0 and off_price <= off_mrp else 0
                 cursor.execute("""
                     INSERT INTO product_offers (
-                        id, product_id, marketplace, marketplace_slug, store_name, price, mrp,
+                        id, product_id, marketplace, marketplace_slug, store_name, price, currency, mrp,
                         discount, product_url, affiliate_url, availability, variant_info, data_source,
                         verification_status, last_verified_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     f"offer-{secrets.token_hex(6)}", product_id, offer['marketplace'],
                     offer['marketplace'].lower().replace(" ", "-"), offer['store_name'],
-                    off_price, off_mrp, off_disc, offer['product_url'], offer['affiliate_url'],
+                    off_price, offer['currency'], off_mrp, off_disc, offer['product_url'], offer['affiliate_url'],
                     offer['availability'], offer['variant_info'], offer['data_source'],
                     offer['verification_status'], offer['last_verified_at'], now
                 ))
@@ -2162,6 +2244,9 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
                 raise ValueError("Additional images must be a list of image URLs")
             additional_images = [validate_image_reference(url) for url in additional_images]
             marketplace = str(body.get('marketplace', existing['marketplace']) or '').strip()
+            currency = str(body.get('currency', existing['currency'] or 'INR') or 'INR').strip().upper()
+            if len(currency) != 3 or not currency.isalpha():
+                raise ValueError("Currency must be a 3-letter ISO code")
             product_url = validate_web_url(body.get('product_url', existing['product_url']), "Marketplace product URL")
             affiliate_url = validate_affiliate_url(body.get('affiliate_url', existing_affiliate_url), "Affiliate URL", product_url)
             availability = str(body.get('availability', existing['availability']) or '').strip()
@@ -2204,10 +2289,14 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
                     if not math.isfinite(off_price) or not math.isfinite(off_mrp) or off_price <= 0 or off_mrp < 0:
                         raise ValueError(f"Enter valid prices for the {off_market} offer")
                     off_url = validate_web_url(offer.get('product_url', ''), f"{off_market} product URL")
+                    off_currency = str(offer.get('currency', currency)).strip().upper() or currency
+                    if len(off_currency) != 3 or not off_currency.isalpha():
+                        raise ValueError(f"Currency for the {off_market} offer must be a 3-letter ISO code")
                     validated_offers.append({
                         'marketplace': off_market,
                         'store_name': str(offer.get('store_name', '')).strip(),
                         'price': off_price,
+                        'currency': off_currency,
                         'mrp': off_mrp,
                         'product_url': off_url,
                         'affiliate_url': validate_affiliate_url(offer.get('affiliate_url', ''), f"{off_market} affiliate URL", off_url),
@@ -2225,7 +2314,7 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
                     detailed_description = ?, key_features = ?, specifications = ?, model_number = ?, variants = ?,
                     color = ?, size = ?, material = ?, weight = ?, dimensions = ?, manufacturer = ?,
                     country_of_origin = ?, product_video_url = ?, warranty_info = ?, image = ?, additional_images = ?,
-                    mrp = ?, selling_price = ?, discount = ?,
+                    mrp = ?, selling_price = ?, currency = ?, discount = ?,
                     marketplace = ?, product_url = ?, rating = ?, review_count = ?,
                     availability = ?, stock_status = ?, featured = ?, best_value = ?,
                     status = ?, updated_at = ?
@@ -2234,7 +2323,7 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
                 name, brand, category, subcategory, description, short_description, detailed_description,
                 json.dumps(key_features), json.dumps(specifications), model_number, json.dumps(variants),
                 color, size, material, weight, dimensions, manufacturer, country_of_origin,
-                product_video_url, warranty_info, image, json.dumps(additional_images), mrp, selling_price, discount,
+                product_video_url, warranty_info, image, json.dumps(additional_images), mrp, selling_price, currency, discount,
                 marketplace, product_url, rating, review_count, availability,
                 stock_status, featured, best_value, status, now, product_id
             ))
@@ -2245,6 +2334,7 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
                     'marketplace': marketplace,
                     'store_name': '',
                     'price': selling_price,
+                    'currency': currency,
                     'mrp': mrp,
                     'product_url': product_url,
                     'affiliate_url': affiliate_url,
@@ -2260,14 +2350,14 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
                     off_disc = round(((off_mrp - off_price) / off_mrp) * 100) if off_mrp > 0 and off_price <= off_mrp else 0
                     cursor.execute("""
                         INSERT INTO product_offers (
-                            id, product_id, marketplace, marketplace_slug, store_name, price, mrp,
+                            id, product_id, marketplace, marketplace_slug, store_name, price, currency, mrp,
                             discount, product_url, affiliate_url, availability, variant_info, data_source,
                             verification_status, last_verified_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         f"offer-{secrets.token_hex(6)}", product_id, offer['marketplace'],
                         offer['marketplace'].lower().replace(" ", "-"), offer['store_name'],
-                        off_price, off_mrp, off_disc, offer['product_url'], offer['affiliate_url'],
+                        off_price, offer['currency'], off_mrp, off_disc, offer['product_url'], offer['affiliate_url'],
                         offer['availability'], offer['variant_info'], offer['data_source'],
                         offer['verification_status'], offer['last_verified_at'], now
                     ))

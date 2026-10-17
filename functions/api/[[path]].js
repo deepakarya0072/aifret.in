@@ -8,6 +8,17 @@ const DEFAULT_CATEGORIES = [
   'Home & Kitchen', 'Watches'
 ];
 const DEFAULT_MARKETPLACES = ['Amazon', 'Flipkart', 'Meesho', 'Myntra', 'Other Stores'];
+const IMPORT_MARKETPLACE_HOSTS = {
+  Amazon: ['amazon.in', 'amazon.com', 'amzn.in', 'amzn.to'],
+  Flipkart: ['flipkart.com', 'fkrt.it'],
+  Meesho: ['meesho.com'],
+  Myntra: ['myntra.com']
+};
+const IMPORT_FIELDS = [
+  'name', 'brand', 'description', 'category', 'subcategory', 'image', 'price', 'mrp',
+  'discount', 'currency', 'availability', 'product_id', 'model_number', 'additional_images',
+  'key_features', 'specifications', 'variants'
+];
 
 function json(data, status = 200, headers = {}) {
   return new Response(JSON.stringify(data), {
@@ -31,6 +42,118 @@ function database(env) {
   const db = env.AIFRET_DB || env.DB;
   if (!db) throw new Error('D1 binding AIFRET_DB is missing. Configure AIFRET_DB in Cloudflare Pages.');
   return db;
+}
+
+function importUrl(value) {
+  const sourceUrl = String(value || '').trim();
+  let parsed;
+  try { parsed = new URL(sourceUrl); } catch { throw new Error('Paste a valid marketplace or affiliate URL.'); }
+  const hostname = parsed.hostname.toLowerCase().replace(/\.$/, '');
+  if (parsed.protocol !== 'https:' || !hostname || parsed.username || parsed.password) {
+    throw new Error('Import URLs must use HTTPS and cannot contain embedded credentials.');
+  }
+  if (/^(localhost|127\.|10\.|192\.168\.|169\.254\.|172\.(?:1[6-9]|2\d|3[0-1])\.|::1|fc|fd)/i.test(hostname) || hostname.endsWith('.local')) {
+    throw new Error('Private, local, or internal network URLs are not allowed.');
+  }
+  return { sourceUrl, hostname };
+}
+
+function detectImportMarketplace(sourceUrl, env) {
+  const { hostname } = importUrl(sourceUrl);
+  for (const [marketplace, hosts] of Object.entries(IMPORT_MARKETPLACE_HOSTS)) {
+    if (hosts.some((host) => hostname === host || hostname.endsWith(`.${host}`))) return { marketplace, hostname };
+  }
+  const allowed = String(env.AIFRET_IMPORT_ALLOWED_DOMAINS || '').split(',').map((item) => item.trim().toLowerCase().replace(/\.$/, '')).filter(Boolean);
+  if (allowed.some((host) => hostname === host || hostname.endsWith(`.${host}`))) return { marketplace: 'Other Stores', hostname };
+  throw new Error('Unsupported marketplace domain. Supported marketplaces: Amazon, Flipkart, Meesho, and Myntra.');
+}
+
+function importProviderConfig(marketplace, env) {
+  const config = {
+    Amazon: ['AMAZON_CREATORS_API_ENDPOINT', 'AMAZON_CREATORS_API_TOKEN'],
+    Flipkart: ['FLIPKART_AFFILIATE_API_ENDPOINT', 'FLIPKART_AFFILIATE_API_TOKEN'],
+    Meesho: ['MEESHO_AFFILIATE_API_ENDPOINT', 'MEESHO_AFFILIATE_API_TOKEN'],
+    Myntra: ['MYNTRA_AFFILIATE_API_ENDPOINT', 'MYNTRA_AFFILIATE_API_TOKEN']
+  }[marketplace];
+  const endpoint = config ? String(env[config[0]] || '').trim() : '';
+  const token = config ? String(env[config[1]] || '').trim() : '';
+  if (!endpoint || !token) return { configured: false, message: `${marketplace} authorized API access is not configured. Enter the details manually or configure server-side provider credentials.` };
+  let parsed;
+  try { parsed = new URL(endpoint); } catch { throw new Error('The configured provider endpoint is invalid.'); }
+  if (parsed.protocol !== 'https:' || !parsed.hostname) throw new Error('The configured provider endpoint must be a public HTTPS URL.');
+  return { configured: true, endpoint, token };
+}
+
+function importValue(data, ...keys) {
+  if (!data || typeof data !== 'object') return null;
+  for (const key of keys) {
+    let current = data;
+    for (const part of key.split('.')) {
+      if (!current || typeof current !== 'object' || !(part in current)) { current = null; break; }
+      current = current[part];
+    }
+    if (current !== null && current !== undefined && current !== '' && !(Array.isArray(current) && !current.length)) return current;
+  }
+  return null;
+}
+
+function importList(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string' && value.trim()) return value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+  return [];
+}
+
+function normalizeImportResponse(payload, sourceUrl, marketplace) {
+  const data = payload?.product || payload?.item || payload?.data || payload;
+  const item = Array.isArray(data) ? data[0] : data;
+  if (!item || typeof item !== 'object') throw new Error('The authorized provider did not return product data.');
+  const product = {
+    name: importValue(item, 'name', 'title', 'product_name'),
+    brand: importValue(item, 'brand', 'brand_name'),
+    description: importValue(item, 'description', 'long_description', 'details'),
+    short_description: importValue(item, 'short_description', 'summary'),
+    category: importValue(item, 'category', 'category_name'),
+    subcategory: importValue(item, 'subcategory', 'sub_category'),
+    image: importValue(item, 'image', 'image_url', 'primary_image', 'images.0'),
+    additional_images: importList(importValue(item, 'additional_images', 'images', 'gallery')),
+    price: importValue(item, 'price', 'selling_price', 'current_price', 'offers.price'),
+    mrp: importValue(item, 'mrp', 'original_price', 'list_price', 'offers.mrp'),
+    discount: importValue(item, 'discount', 'discount_percentage'),
+    currency: importValue(item, 'currency'),
+    availability: importValue(item, 'availability', 'stock_status', 'availability_status'),
+    product_id: importValue(item, 'product_id', 'asin', 'sku', 'id'),
+    model_number: importValue(item, 'model_number', 'model', 'model_no'),
+    manufacturer: importValue(item, 'manufacturer', 'maker'),
+    country_of_origin: importValue(item, 'country_of_origin', 'origin'),
+    material: importValue(item, 'material'), color: importValue(item, 'color', 'colour'),
+    size: importValue(item, 'size'), weight: importValue(item, 'weight'), dimensions: importValue(item, 'dimensions'),
+    key_features: importList(importValue(item, 'key_features', 'features', 'bullet_points')),
+    specifications: importValue(item, 'specifications', 'specs') || {},
+    variants: importList(importValue(item, 'variants', 'variant_options')),
+    source_url: sourceUrl, affiliate_url: sourceUrl, marketplace,
+    data_source: 'authorized_provider', verification_status: 'needs_verification'
+  };
+  product.missing_fields = IMPORT_FIELDS.filter((field) => product[field] === null || product[field] === undefined || product[field] === '' || (Array.isArray(product[field]) && !product[field].length) || (field === 'specifications' && !Object.keys(product[field]).length));
+  return product;
+}
+
+async function fetchAuthorizedProduct(sourceUrl, marketplace, env) {
+  const config = importProviderConfig(marketplace, env);
+  if (!config.configured) return { ready: false, marketplace, source_url: sourceUrl, affiliate_url: sourceUrl, data_source: 'manual', missing_fields: [...IMPORT_FIELDS], provider: config };
+  let response;
+  try {
+    response = await fetch(config.endpoint, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: `Bearer ${config.token}` },
+      body: JSON.stringify({ url: sourceUrl, marketplace }),
+      signal: AbortSignal.timeout(8000), redirect: 'manual'
+    });
+  } catch {
+    throw new Error(`The ${marketplace} authorized provider could not be reached. Manual entry is still available.`);
+  }
+  if (!response.ok) throw new Error(`The ${marketplace} authorized provider returned HTTP ${response.status}.`);
+  let payload;
+  try { payload = await response.json(); } catch { throw new Error('The authorized provider returned invalid JSON.'); }
+  return { ...normalizeImportResponse(payload, sourceUrl, marketplace), ready: true, provider: { configured: true, message: 'Data returned by the configured authorized provider.' } };
 }
 
 function now() {
@@ -218,6 +341,12 @@ function finiteNumber(value, label, { min = -Infinity, max = Infinity } = {}) {
   return number;
 }
 
+function normalizeCurrency(value) {
+  const currency = String(value || 'INR').trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(currency)) throw new Error('Currency must be a 3-letter ISO code');
+  return currency;
+}
+
 async function productWithOffers(db, id) {
   const product = await db.prepare('SELECT * FROM products WHERE id = ?').bind(id).first();
   if (!product) return null;
@@ -249,6 +378,7 @@ function validateOffers(offers, primaryMarketplace, primaryAvailability, env) {
       marketplace,
       store_name: String(offer.store_name || '').trim(),
       price,
+      currency: normalizeCurrency(offer.currency || 'INR'),
       mrp,
       product_url: productUrl,
       affiliate_url: validateAffiliateUrl(offer.affiliate_url, `${marketplace} affiliate URL`, productUrl, env),
@@ -269,14 +399,14 @@ function offerStatements(productId, primary, additional) {
       : 0;
     return {
       sql: `INSERT INTO product_offers
-        (id, product_id, marketplace, marketplace_slug, store_name, price, mrp, discount,
+        (id, product_id, marketplace, marketplace_slug, store_name, price, currency, mrp, discount,
          product_url, affiliate_url, availability, variant_info, data_source,
          verification_status, last_verified_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       values: [
         `offer-${randomHex(6)}`, productId, offer.marketplace,
         offer.marketplace.toLowerCase().replaceAll(' ', '-'), offer.store_name || '',
-        offer.price, offer.mrp, discount, offer.product_url, offer.affiliate_url || '',
+        offer.price, offer.currency || 'INR', offer.mrp, discount, offer.product_url, offer.affiliate_url || '',
         offer.availability || 'In Stock', offer.variant_info || '', offer.data_source || 'manual',
         offer.verification_status || 'needs_verification', offer.last_verified_at || '', timestamp
       ]
@@ -423,6 +553,7 @@ async function addProduct(body, env, db, admin) {
   const image = validateImageReference(body.image);
   const additionalImages = body.additional_images || [];
   const marketplace = String(body.marketplace || '').trim();
+  const currency = normalizeCurrency(body.currency || 'INR');
   const productUrl = validateWebUrl(body.product_url, 'Marketplace product URL');
   const affiliateUrl = validateAffiliateUrl(body.affiliate_url, 'Affiliate URL', productUrl, env);
   let availability = String(body.availability || 'In Stock').trim();
@@ -462,7 +593,7 @@ async function addProduct(body, env, db, admin) {
       detailed_description, key_features, specifications, model_number, variants, color, size,
       material, weight, dimensions, manufacturer, country_of_origin, product_video_url, warranty_info,
       image, additional_images,
-      mrp, selling_price, discount, marketplace, product_url, rating, review_count, availability,
+      mrp, selling_price, currency, discount, marketplace, product_url, rating, review_count, availability,
       stock_status, featured, best_value, status, created_at, updated_at
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -474,12 +605,12 @@ async function addProduct(body, env, db, admin) {
       productId, productCode, name, brand, category, subcategory, description, shortDescription,
       detailedDescription, JSON.stringify(keyFeatures), JSON.stringify(specifications), modelNumber,
       JSON.stringify(variants), color, size, material, weight, dimensions, manufacturer, countryOfOrigin,
-      productVideoUrl, warrantyInfo, image, JSON.stringify(parsedImages), mrp, sellingPrice, discount, marketplace, productUrl,
+      productVideoUrl, warrantyInfo, image, JSON.stringify(parsedImages), mrp, sellingPrice, currency, discount, marketplace, productUrl,
       rating, reviewCount, availability, stockStatus, featured, bestValue, status, timestamp, timestamp
     ]
   }];
   const primaryOffer = {
-    marketplace, store_name: '', price: sellingPrice, mrp, product_url: productUrl,
+    marketplace, store_name: '', price: sellingPrice, currency, mrp, product_url: productUrl,
     affiliate_url: affiliateUrl, availability
   };
   statements.push(...offerStatements(productId, primaryOffer, additionalOffers));
@@ -531,6 +662,7 @@ async function updateProduct(productId, body, env, db, admin) {
   if (!Array.isArray(additionalImages)) throw new Error('Additional images must be a list of image URLs');
   const parsedImages = additionalImages.map(validateImageReference);
   const marketplace = String(body.marketplace ?? existing.marketplace).trim();
+  const currency = normalizeCurrency(body.currency ?? existing.currency ?? 'INR');
   const productUrl = validateWebUrl(body.product_url ?? existing.product_url, 'Marketplace product URL');
   const affiliateUrl = validateAffiliateUrl(body.affiliate_url ?? primary?.affiliate_url, 'Affiliate URL', productUrl, env);
   let availability = String(body.availability ?? existing.availability).trim();
@@ -554,7 +686,7 @@ async function updateProduct(productId, body, env, db, admin) {
     sql: `UPDATE products SET name=?, brand=?, category=?, subcategory=?, description=?, short_description=?,
       detailed_description=?, key_features=?, specifications=?, model_number=?, variants=?, color=?, size=?,
       material=?, weight=?, dimensions=?, manufacturer=?, country_of_origin=?, product_video_url=?, warranty_info=?, image=?,
-      additional_images=?, mrp=?, selling_price=?, discount=?, marketplace=?, product_url=?,
+      additional_images=?, mrp=?, selling_price=?, currency=?, discount=?, marketplace=?, product_url=?,
       rating=?, review_count=?, availability=?, stock_status=?, featured=?, best_value=?, status=?, updated_at=?
       WHERE id=?`,
     values: [
@@ -562,7 +694,7 @@ async function updateProduct(productId, body, env, db, admin) {
       JSON.stringify(keyFeatures), JSON.stringify(specifications), modelNumber, JSON.stringify(variants), color, size,
       material, weight, dimensions, manufacturer, countryOfOrigin, productVideoUrl, warrantyInfo, image,
       JSON.stringify(parsedImages), mrp,
-      sellingPrice, discount, marketplace, productUrl, rating, reviewCount, availability,
+      sellingPrice, currency, discount, marketplace, productUrl, rating, reviewCount, availability,
       stockStatus, featured, bestValue, status, now(), productId
     ]
   }];
@@ -571,7 +703,7 @@ async function updateProduct(productId, body, env, db, admin) {
     const additionalOffers = validateOffers(body.offers ?? body.comparison ?? [], marketplace, availability, env);
     statements.push({ sql: 'DELETE FROM product_offers WHERE product_id=?', values: [productId] });
     statements.push(...offerStatements(productId, {
-      marketplace, store_name: '', price: sellingPrice, mrp, product_url: productUrl,
+      marketplace, store_name: '', price: sellingPrice, currency, mrp, product_url: productUrl,
       affiliate_url: affiliateUrl, availability
     }, additionalOffers));
   }
@@ -700,6 +832,34 @@ async function imageObjectResponse(env, key) {
   headers.set('ETag', object.httpEtag);
   headers.set('X-Content-Type-Options', 'nosniff');
   return new Response(object.body, { headers });
+}
+
+async function importPreview(request, env, db, body) {
+  const admin = await adminSession(request, db);
+  if (!admin) return error('Unauthorized', 401);
+  const sourceUrl = String(body.url || '').trim();
+  const detected = detectImportMarketplace(sourceUrl, env);
+  const duplicateResult = await db.prepare(`
+    SELECT id, name, status, product_url AS matched_url FROM products WHERE product_url=?
+    UNION ALL
+    SELECT p.id, p.name, p.status, o.product_url AS matched_url
+    FROM product_offers o JOIN products p ON p.id=o.product_id
+    WHERE o.product_url=? OR o.affiliate_url=? LIMIT 5
+  `).bind(sourceUrl, sourceUrl, sourceUrl).all();
+  let preview;
+  try {
+    preview = await fetchAuthorizedProduct(sourceUrl, detected.marketplace, env);
+  } catch (exception) {
+    return json({
+      success: false, ready: false, marketplace: detected.marketplace, host: detected.hostname,
+      source_url: sourceUrl, affiliate_url: sourceUrl, duplicates: duplicateResult.results || [],
+      message: exception.message, manual_fallback: true
+    }, 424);
+  }
+  return json({
+    success: true, ...preview, host: detected.hostname, duplicates: duplicateResult.results || [], manual_fallback: true,
+    message: preview.ready ? 'Product details fetched. Review every field before saving.' : preview.provider?.message
+  });
 }
 
 async function handleGet(request, env, db, route, url) {
@@ -835,6 +995,7 @@ async function handlePost(request, env, db, route) {
       'Set-Cookie': cookieHeader(SESSION_COOKIE, token, 604800)
     });
   }
+  if (route === 'admin/import-preview') return importPreview(request, env, db, body);
   if (route === 'affiliate-click') return recordAffiliateClick(body, db);
   if (route === 'admin/logout') {
     const token = cookieValue(request, SESSION_COOKIE);

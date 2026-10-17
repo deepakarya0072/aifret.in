@@ -160,9 +160,9 @@ test('unexpected backend errors are logged privately and return a correlatable g
   const response = await request({}, '/api/admin/session');
   const result = await response.json();
 
-  assert.equal(response.status, 500);
+  assert.equal(response.status, 503);
   assert.equal(response.headers.get('X-Request-ID'), result.requestId);
-  assert.match(result.message, /could not complete the request/);
+  assert.match(result.message, /database is not ready/i);
   assert.equal('stack' in result, false);
   assert.match(JSON.stringify(workerErrors), /D1 binding AIFRET_DB is missing/);
   assert.match(JSON.stringify(workerErrors), new RegExp(result.requestId));

@@ -46,6 +46,7 @@ For an authenticated Wrangler session, apply the production schema with:
 ```powershell
 npx wrangler d1 list
 npx wrangler d1 execute <database-name> --remote --file=migrations/0001_cloudflare_schema.sql
+npx wrangler d1 execute <database-name> --remote --file=migrations/0002_affiliate_import_currency.sql
 npx wrangler d1 execute <database-name> --remote --command="SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
 ```
 
@@ -60,13 +61,28 @@ For a Pages project using Wrangler, set the secrets with `wrangler pages secret 
 
 The new D1 database is independent of local `data/aifret.db`. This migration does not transfer existing products, customer accounts, or uploaded images. The static demo catalog remains available on the storefront until D1 has published products, but the admin catalogue starts empty. Import only the product data you intend to publish; customer records and password hashes are not included or copied.
 
+## Authorized affiliate URL import
+
+The admin panel now includes **Import Product by Affiliate URL** and `POST /api/admin/import-preview`. The endpoint validates HTTPS URLs, detects Amazon/Flipkart/Meesho/Myntra, preserves the pasted URL and tracking parameters, checks duplicate product/offer URLs, and requires an authenticated admin session. It never scrapes marketplace pages.
+
+Import data is fetched only through a server-side authorized JSON provider configured with both an endpoint and token. Configure only providers that your affiliate account and marketplace terms permit:
+
+| Marketplace | Endpoint secret | Token secret |
+| --- | --- | --- |
+| Amazon | `AMAZON_CREATORS_API_ENDPOINT` | `AMAZON_CREATORS_API_TOKEN` |
+| Flipkart | `FLIPKART_AFFILIATE_API_ENDPOINT` | `FLIPKART_AFFILIATE_API_TOKEN` |
+| Meesho | `MEESHO_AFFILIATE_API_ENDPOINT` | `MEESHO_AFFILIATE_API_TOKEN` |
+| Myntra | `MYNTRA_AFFILIATE_API_ENDPOINT` | `MYNTRA_AFFILIATE_API_TOKEN` |
+
+Each configured endpoint receives a server-side `POST` JSON request with `{ "url": "...", "marketplace": "..." }` and must return JSON containing a product object (or `data`/`item`) with any available fields such as `name`, `brand`, `description`, `price`, `mrp`, `image`, and `availability`. Missing fields are shown for manual editing. If the endpoint or token is missing, import returns a clear manual-fallback response and the existing product form remains usable. No marketplace API credentials are sent to the browser.
+
 ## Admin Panel Credentials
 
 There is no default admin password. Set `AIFRET_ADMIN_USERNAME` and `AIFRET_ADMIN_PASSWORD` before the first startup when the database has no admin account. Existing database accounts are not changed by updating these variables.
 
 ## Database Architecture
 
-The production Cloudflare D1 schema is in `migrations/0001_cloudflare_schema.sql`. The optional local Python server stores its separate SQLite database at `data/aifret.db`:
+The production Cloudflare D1 schema is in `migrations/0001_cloudflare_schema.sql`; `migrations/0002_affiliate_import_currency.sql` adds currency fields for the import workflow. The optional local Python server stores its separate SQLite database at `data/aifret.db`:
 
 - `products`: id (public slug), immutable product_code, name, brand, category, subcategory, description, image, additional_images, pricing, availability, display flags, status, and timestamps.
 - `product_offers`: id, product_id, marketplace, marketplace_slug, store_name, price, mrp, discount, product_url, affiliate_url, availability, updated_at.
