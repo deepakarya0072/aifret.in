@@ -1053,6 +1053,20 @@ export async function onRequest(context) {
     return await handleDelete(request, db, route, url);
   } catch (exception) {
     if (exception.status) return error(exception.message, exception.status);
+    const databaseMessage = String(exception?.message || '');
+    if (/no such table|no such column|D1 binding AIFRET_DB is missing|database is locked/i.test(databaseMessage)) {
+      console.error('AIFRET database request failed:', {
+        requestId,
+        method,
+        route,
+        error: exception.stack || databaseMessage
+      });
+      return json({
+        error: true,
+        message: 'AIFRET database is not ready. Apply migrations/0001_cloudflare_schema.sql to the configured AIFRET_DB binding, then retry.',
+        requestId
+      }, 503, { 'X-Request-ID': requestId });
+    }
     console.error('AIFRET API request failed:', {
       requestId,
       method,
