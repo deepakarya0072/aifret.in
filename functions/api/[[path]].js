@@ -147,10 +147,10 @@ async function customerSession(request, db) {
 async function provisionFirstAdmin(env, db) {
   const count = await db.prepare('SELECT COUNT(*) AS count FROM admin_users').first();
   if (count.count > 0) return;
-  const username = String(env.AIFRET_ADMIN_USERNAME || '').trim();
-  const password = String(env.AIFRET_ADMIN_PASSWORD || '');
+  const username = String(env.AIFRET_ADMIN_USERNAME || env.ADMIN_USERNAME || '').trim();
+  const password = String(env.AIFRET_ADMIN_PASSWORD || env.ADMIN_PASSWORD || '');
   if (!username || !password) {
-    throw new Error('Set AIFRET_ADMIN_USERNAME and AIFRET_ADMIN_PASSWORD as Cloudflare secrets before the first admin login.');
+    throw Object.assign(new Error('Admin bootstrap is not configured. Set AIFRET_ADMIN_USERNAME and AIFRET_ADMIN_PASSWORD as Cloudflare secrets, then retry.'), { status: 503 });
   }
   const { hash, salt } = await hashPassword(password);
   await db.prepare(`

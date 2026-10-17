@@ -42,6 +42,8 @@ The production API runs on the same origin as the static site; no localhost or s
 3. In the Pages project settings, add a D1 binding named `AIFRET_DB` and select that database.
 4. Create an R2 bucket, then add an R2 binding named `AIFRET_IMAGES` to the Pages project. Product image uploads and customer try-on photos use this bucket.
 5. Add `AIFRET_ADMIN_USERNAME` and `AIFRET_ADMIN_PASSWORD` as encrypted production secrets in Pages settings. Choose a unique, strong password; do not reuse a password shared in chat or store either value in the repository. The first successful admin login creates the production admin when D1 contains no admin user. Changing the secrets later does not change an existing database account.
+
+For a Pages project using Wrangler, set the secrets with `wrangler pages secret put AIFRET_ADMIN_USERNAME` and `wrangler pages secret put AIFRET_ADMIN_PASSWORD` for the deployed project. Also confirm the D1 binding is named `AIFRET_DB` (the API temporarily accepts the legacy `DB` name during migration).
 6. Optionally set `AIFRET_ALLOWED_AFFILIATE_DOMAINS` to a comma-separated list of approved affiliate hosts and `AI_VIDEO_MAX_GENERATIONS_PER_CUSTOMER` to a generation cap.
 7. Deploy the latest commit from the connected branch. Keep the existing DNS/custom-domain configuration unchanged until the Pages deployment is healthy.
 8. Verify `https://aifret.in/admin`, `https://aifret.in/api/admin/session` (unauthenticated requests should return 401), and `https://aifret.in/api/products`. Then sign in, check product management and uploads, refresh the page, and log out.
