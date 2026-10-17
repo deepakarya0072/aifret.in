@@ -26,8 +26,11 @@ function error(message, status = 400) {
 }
 
 function database(env) {
-  if (!env.AIFRET_DB) throw new Error('D1 binding AIFRET_DB is missing.');
-  return env.AIFRET_DB;
+  // Keep compatibility with the earlier Pages binding name while the project
+  // is migrated to the documented AIFRET_DB binding.
+  const db = env.AIFRET_DB || env.DB;
+  if (!db) throw new Error('D1 binding AIFRET_DB is missing. Configure AIFRET_DB in Cloudflare Pages.');
+  return db;
 }
 
 function now() {
