@@ -62,6 +62,7 @@ class MemoryD1 {
         throw new Error(`Unsupported D1 run() query in test: ${sql}`);
       },
       all: async () => {
+        if (sql.includes('from products where product_url')) return { results: [] };
         if (sql.startsWith('select p.* from products p')) return { results: [] };
         if (sql.startsWith('select distinct category from products')) return { results: [] };
         if (sql.startsWith('select distinct marketplace from product_offers')) return { results: [] };
@@ -166,4 +167,32 @@ test('unexpected backend errors are logged privately and return a correlatable g
   assert.equal('stack' in result, false);
   assert.match(JSON.stringify(workerErrors), /D1 binding AIFRET_DB is missing/);
   assert.match(JSON.stringify(workerErrors), new RegExp(result.requestId));
+});
+
+test('affiliate import validates marketplace URLs and exposes manual fallback', async () => {
+  const db = new MemoryD1();
+  const env = {
+    AIFRET_DB: db,
+    AIFRET_ADMIN_USERNAME: 'test-admin',
+    AIFRET_ADMIN_PASSWORD: 'test-password-never-used-in-production'
+  };
+  const login = await request(env, '/api/admin/login', {
+    method: 'POST', body: { username: 'test-admin', password: env.AIFRET_ADMIN_PASSWORD }
+  });
+  const cookie = login.headers.get('Set-Cookie').split(';', 1)[0];
+
+  const amazon = await request(env, '/api/admin/import-preview', {
+    method: 'POST', cookie, body: { url: 'https://link.amazon/B00PdedXH?tag=aifret-21' }
+  });
+  assert.equal(amazon.status, 424);
+  const amazonResult = await amazon.json();
+  assert.equal(amazonResult.marketplace, 'Amazon');
+  assert.equal(amazonResult.affiliate_url, 'https://link.amazon/B00PdedXH?tag=aifret-21');
+  assert.equal(amazonResult.manual_fallback, true);
+
+  const unsupported = await request(env, '/api/admin/import-preview', {
+    method: 'POST', cookie, body: { url: 'https://unsupported.example/item' }
+  });
+  assert.equal(unsupported.status, 422);
+  assert.match((await unsupported.json()).message, /unsupported marketplace/i);
 });

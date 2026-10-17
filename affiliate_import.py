@@ -15,7 +15,7 @@ import urllib.request
 
 
 MARKETPLACE_HOSTS = {
-    "Amazon": {"amazon.in", "amazon.com", "amzn.in", "amzn.to"},
+    "Amazon": {"amazon.in", "amazon.com", "amzn.in", "amzn.to", "link.amazon", "a.co"},
     "Flipkart": {"flipkart.com", "fkrt.it"},
     "Meesho": {"meesho.com"},
     "Myntra": {"myntra.com"},

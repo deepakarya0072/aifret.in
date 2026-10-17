@@ -9,7 +9,7 @@ const DEFAULT_CATEGORIES = [
 ];
 const DEFAULT_MARKETPLACES = ['Amazon', 'Flipkart', 'Meesho', 'Myntra', 'Other Stores'];
 const IMPORT_MARKETPLACE_HOSTS = {
-  Amazon: ['amazon.in', 'amazon.com', 'amzn.in', 'amzn.to'],
+  Amazon: ['amazon.in', 'amazon.com', 'amzn.in', 'amzn.to', 'link.amazon', 'a.co'],
   Flipkart: ['flipkart.com', 'fkrt.it'],
   Meesho: ['meesho.com'],
   Myntra: ['myntra.com']
@@ -838,7 +838,12 @@ async function importPreview(request, env, db, body) {
   const admin = await adminSession(request, db);
   if (!admin) return error('Unauthorized', 401);
   const sourceUrl = String(body.url || '').trim();
-  const detected = detectImportMarketplace(sourceUrl, env);
+  let detected;
+  try {
+    detected = detectImportMarketplace(sourceUrl, env);
+  } catch (exception) {
+    return error(exception.message, 422);
+  }
   const duplicateResult = await db.prepare(`
     SELECT id, name, status, product_url AS matched_url FROM products WHERE product_url=?
     UNION ALL
@@ -854,6 +859,12 @@ async function importPreview(request, env, db, body) {
       success: false, ready: false, marketplace: detected.marketplace, host: detected.hostname,
       source_url: sourceUrl, affiliate_url: sourceUrl, duplicates: duplicateResult.results || [],
       message: exception.message, manual_fallback: true
+    }, 424);
+  }
+  if (!preview.ready) {
+    return json({
+      success: false, ...preview, host: detected.hostname, duplicates: duplicateResult.results || [],
+      message: preview.provider?.message || 'Manual entry is available.', manual_fallback: true
     }, 424);
   }
   return json({
