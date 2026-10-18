@@ -38,19 +38,25 @@ Then open in your browser:
 The production API runs on the same origin as the static site; no localhost or separate paid Python service is required. Cloudflare Pages, D1, and R2 have usage limits and may incur charges if usage exceeds the account's free allowances. Check current Cloudflare pricing and usage before enabling production traffic.
 
 1. In Cloudflare **Workers & Pages**, open the project that serves `aifret.in`. Confirm it is connected to this GitHub repository and deploys the intended branch. If there is no Pages project, create one from this repository. Use the repository root, no build command, and `.` as the build output directory. Pages Functions must be deployed through the Git integration or Wrangler; a static drag-and-drop upload does not deploy the `functions/` code.
-2. Create a D1 database. In its SQL console, execute the contents of [`migrations/0001_cloudflare_schema.sql`](./migrations/0001_cloudflare_schema.sql).
-3. In the Pages project settings, add a D1 binding named `AIFRET_DB` and select that database.
-
-For an authenticated Wrangler session, apply the production schema with:
+2. Create or select the existing D1 database. Do not delete or recreate a production database. In the Pages project settings, add a D1 binding named `AIFRET_DB` and select that database. `AIFRET_DB` is the binding name; it may not be the actual D1 database name used by Wrangler.
+3. Before applying migrations, authenticate Wrangler and identify the actual database name. Inspect the remote schema first:
 
 ```powershell
+npx wrangler login
 npx wrangler d1 list
-npx wrangler d1 execute <database-name> --remote --file=migrations/0001_cloudflare_schema.sql
-npx wrangler d1 execute <database-name> --remote --file=migrations/0002_affiliate_import_currency.sql
-npx wrangler d1 execute <database-name> --remote --command="SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
+npx wrangler d1 execute <actual-database-name> --remote --command="SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
+npx wrangler d1 execute <actual-database-name> --remote --command="PRAGMA table_info(products);"
+npx wrangler d1 execute <actual-database-name> --remote --command="PRAGMA table_info(product_offers);"
 ```
 
-Use the exact database name returned by `wrangler d1 list`; do not substitute the Pages binding name unless it is also the D1 database name.
+Apply `0001` only when the core tables are absent. If the tables already exist, do not rerun it blindly. Apply `0002` only when either `products.currency` or `product_offers.currency` is absent:
+
+```powershell
+npx wrangler d1 execute <actual-database-name> --remote --file=migrations/0001_cloudflare_schema.sql
+npx wrangler d1 execute <actual-database-name> --remote --file=migrations/0002_affiliate_import_currency.sql
+```
+
+The first command is for a new database; an existing database that already has the `0001` tables normally needs only the second command. `0002` uses `ALTER TABLE`, so running it twice can produce a duplicate-column error. These commands modify the selected remote database; verify the database name before executing them.
 4. Create an R2 bucket, then add an R2 binding named `AIFRET_IMAGES` to the Pages project. Product image uploads and customer try-on photos use this bucket.
 5. Add `AIFRET_ADMIN_USERNAME` and `AIFRET_ADMIN_PASSWORD` as encrypted production secrets in Pages settings. Choose a unique, strong password; do not reuse a password shared in chat or store either value in the repository. The first successful admin login creates the production admin when D1 contains no admin user. Changing the secrets later does not change an existing database account.
 
