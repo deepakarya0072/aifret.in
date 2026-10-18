@@ -1226,7 +1226,7 @@ export async function onRequest(context) {
   } catch (exception) {
     if (exception.status) return error(exception.message, exception.status);
     const databaseMessage = String(exception?.message || '');
-    if (/no such table|no such column|D1 binding AIFRET_DB is missing|database is locked/i.test(databaseMessage)) {
+    if (/no such table|no such column|has no column named|no column named|D1 binding AIFRET_DB is missing|database is locked/i.test(databaseMessage)) {
       console.error('AIFRET database request failed:', {
         requestId,
         method,
@@ -1235,7 +1235,7 @@ export async function onRequest(context) {
       });
       return json({
         error: true,
-        message: 'AIFRET database is not ready. Apply migrations/0001_cloudflare_schema.sql to the configured AIFRET_DB binding, then retry.',
+        message: 'AIFRET database is not ready: apply migrations/0001_cloudflare_schema.sql and migrations/0002_affiliate_import_currency.sql to the configured AIFRET_DB binding, then retry.',
         requestId
       }, 503, { 'X-Request-ID': requestId });
     }
