@@ -942,6 +942,7 @@ body {
 .compare-table-row { display: grid; grid-template-columns: minmax(150px, 1.4fr) repeat(3, minmax(110px, 0.8fr)) 110px; align-items: center; gap: 14px; min-width: 680px; padding: 15px 22px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 0.88rem; }
 .compare-table-row:last-child { border-bottom: 0; }
 .compare-table-row strong { color: var(--text); }
+.compare-table-row.best-offer-row { background: rgba(22, 163, 74, 0.08); box-shadow: inset 4px 0 0 var(--success); }
 .compare-table-head { color: var(--muted); background: var(--bg-soft); font-size: 0.72rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
 .compare-table-row .btn { justify-self: end; }
 .empty-state { padding: 36px; text-align: center; background: var(--surface); border: 1px solid var(--line); border-radius: 20px; }

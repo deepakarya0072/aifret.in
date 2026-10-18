@@ -289,10 +289,10 @@ function validateWebUrl(value, fieldName, required = true) {
   try {
     parsed = new URL(result);
   } catch {
-    throw new Error(`${fieldName} must be a valid HTTP or HTTPS URL`);
+    throw new Error(`${fieldName} must be a valid HTTPS URL`);
   }
-  if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password) {
-    throw new Error(`${fieldName} must be a valid HTTP or HTTPS URL`);
+  if (parsed.protocol !== 'https:' || !parsed.hostname || parsed.username || parsed.password) {
+    throw new Error(`${fieldName} must be a valid HTTPS URL`);
   }
   return result;
 }
@@ -570,8 +570,8 @@ async function addProduct(body, env, db, admin) {
   const rating = finiteNumber(body.rating ?? 0, 'rating', { min: 0, max: 5 });
   const reviewCount = finiteNumber(body.review_count ?? 0, 'review count', { min: 0 });
   if (!Number.isInteger(reviewCount)) throw new Error('Review count must be a whole number');
-  if (!name || !description || !category || !marketplace || !productUrl) {
-    throw new Error('Product name, description, category, marketplace, and product URL are required');
+  if (!name || !category || !marketplace || !productUrl) {
+    throw new Error('Product name, category, marketplace, and product URL are required');
   }
   if (status === 'active' && !image) throw new Error('A product image is required before publishing');
   const additionalOffers = validateOffers(body.offers ?? body.comparison ?? [], marketplace, availability, env);
@@ -675,8 +675,8 @@ async function updateProduct(productId, body, env, db, admin) {
   const rating = finiteNumber(body.rating ?? existing.rating, 'rating', { min: 0, max: 5 });
   const reviewCount = finiteNumber(body.review_count ?? existing.review_count, 'review count', { min: 0 });
   if (!Number.isInteger(reviewCount)) throw new Error('Review count must be a whole number');
-  if (!name || !description || !category || !marketplace) {
-    throw new Error('Name, description, category, marketplace, and positive prices are required');
+  if (!name || !category || !marketplace) {
+    throw new Error('Name, category, marketplace, and positive prices are required');
   }
   if (status === 'active' && !image) throw new Error('A product image is required before publishing');
   const featured = truthy(body.featured ?? existing.featured) ? 1 : 0;

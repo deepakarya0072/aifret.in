@@ -122,8 +122,8 @@ def validate_web_url(value, field_name, required=True):
     if not value and not required:
         return ''
     parsed = urllib.parse.urlparse(value)
-    if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password:
-        raise ValueError(f"{field_name} must be a valid HTTP or HTTPS URL")
+    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError(f"{field_name} must be a valid HTTPS URL")
     return value
 
 def validate_affiliate_url(value, field_name, product_url):
@@ -2025,8 +2025,8 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
             review_count = int(body.get('review_count', 0))
             if not all(math.isfinite(value) for value in (mrp, selling_price, rating)):
                 raise ValueError("Prices and rating must be finite numbers")
-            if not name or not description or not category or not marketplace or not product_url:
-                raise ValueError("Product name, description, category, marketplace, and product URL are required")
+            if not name or not category or not marketplace or not product_url:
+                raise ValueError("Product name, category, marketplace, and product URL are required")
             if status == 'active' and not image:
                 raise ValueError("A product image is required before publishing")
             if mrp <= 0 or selling_price <= 0 or rating < 0 or rating > 5 or review_count < 0:
@@ -2264,8 +2264,8 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
             review_count = int(body.get('review_count', existing['review_count']))
             if not all(math.isfinite(value) for value in (mrp, selling_price, rating)):
                 raise ValueError("Prices and rating must be finite numbers")
-            if not name or not description or not category or not marketplace or mrp <= 0 or selling_price <= 0:
-                raise ValueError("Name, description, category, marketplace, and positive prices are required")
+            if not name or not category or not marketplace or mrp <= 0 or selling_price <= 0:
+                raise ValueError("Name, category, marketplace, and positive prices are required")
             if status == 'active' and not image:
                 raise ValueError("A product image is required before publishing")
             if rating < 0 or rating > 5 or review_count < 0:

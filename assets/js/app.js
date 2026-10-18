@@ -85,10 +85,10 @@ function getQueryParam(name) {
   return params.get(name);
 }
 
-function isValidAffiliateUrl(value) {
+function isValidExternalUrl(value) {
   try {
     const url = new URL(value);
-    return url.protocol === 'http:' || url.protocol === 'https:';
+    return url.protocol === 'https:';
   } catch (error) {
     return false;
   }
@@ -142,8 +142,10 @@ function normalizeProduct(product) {
         ? Number(entry.mrp ?? entry.originalPrice ?? product.mrp ?? product.originalPrice) : null,
       discount: Number.isFinite(Number(entry.discount)) ? Number(entry.discount) : null,
       url: offerUrl,
-      buyUrl: isValidAffiliateUrl(entry.affiliate_url || entry.affiliateUrl) ? (entry.affiliate_url || entry.affiliateUrl) : '',
-      affiliateConfigured: isValidAffiliateUrl(entry.affiliate_url || entry.affiliateUrl),
+      buyUrl: isValidExternalUrl(entry.affiliate_url || entry.affiliateUrl)
+        ? (entry.affiliate_url || entry.affiliateUrl)
+        : (isValidExternalUrl(offerUrl) ? offerUrl : ''),
+      affiliateConfigured: isValidExternalUrl(entry.affiliate_url || entry.affiliateUrl),
       availability: entry.availability || 'Price needs verification',
       verificationStatus: entry.verification_status || 'needs_verification',
       lastVerifiedAt: entry.last_verified_at || '',
@@ -189,7 +191,7 @@ function normalizeProduct(product) {
 function getBestOffer(product) {
   const normalized = normalizeProduct(product);
   const sorted = normalized.comparison
-    .filter((offer) => offer.verificationStatus === 'verified' && Number.isFinite(offer.price) && offer.price > 0)
+    .filter((offer) => Number.isFinite(offer.price) && offer.price > 0)
     .sort((a, b) => a.price - b.price);
   return sorted[0] || {
     marketplace: normalized.marketplace || 'Amazon',
@@ -222,7 +224,7 @@ function renderHeroShowcase() {
   const normalized = normalizeProduct(bestProduct);
   const bestOffer = getBestOffer(normalized);
   const fallbackImg = 'https://images.unsplash.com/photo-1546435770-a3e426bf472b?auto=format&fit=crop&w=900&q=80';
-  const dealUrl = bestOffer.url || normalized.product_url || `product.html?id=${normalized.id}`;
+  const dealUrl = bestOffer.buyUrl || bestOffer.url || normalized.product_url || `product.html?id=${normalized.id}`;
 
   // Mini stack items from other active products
   const miniStack = products.filter((p) => p.id !== bestProduct.id).slice(0, 2);
@@ -364,7 +366,7 @@ function renderProductCard(product, mode = 'featured') {
   const isCompact = mode === 'compact';
   const hasProductVideo = product.videoStatus === 'ready' && isValidMediaUrl(product.productVideoUrl);
   const fallbackImage = 'https://images.unsplash.com/photo-1524758631624-e2822e304c36?auto=format&fit=crop&w=900&q=80';
-  const dealUrl = bestOffer.url || product.product_url || `product.html?id=${product.id}`;
+  const dealUrl = bestOffer.buyUrl || bestOffer.url || product.product_url || `product.html?id=${product.id}`;
 
   return `
     <article class="${isCompact ? 'deal-card' : 'product-card'}">
@@ -444,7 +446,7 @@ function renderHomeComparison() {
         <span>${entry.marketplace}</span>
         <strong>${formatPrice(entry.price)}</strong>
         <small>${entry.discount}% off</small>
-        <a href="${entry.url}" class="btn btn-secondary btn-small" target="_blank" rel="noopener noreferrer">View Deal</a>
+        <a href="${entry.buyUrl || entry.url}" class="btn btn-secondary btn-small" target="_blank" rel="noopener noreferrer">View Deal</a>
       </div>
     `).join('');
 
@@ -477,6 +479,7 @@ function renderProductDetail() {
   const bestOffer = getBestOffer(product);
   const selectedMarketplace = getQueryParam('marketplace');
   const selectedOffer = product.comparison.find((entry) => entry.marketplaceSlug === selectedMarketplace) || bestOffer;
+  const lowestOffer = product.comparison.filter((entry) => Number.isFinite(entry.price) && entry.price > 0).sort((a, b) => a.price - b.price)[0];
   const relatedProducts = products.filter((item) => item.id !== product.id && (item.category === product.category || item.slug === product.slug)).slice(0, 3);
   const fallbackRelated = relatedProducts.length ? relatedProducts : products.filter((item) => item.id !== product.id).slice(0, 3);
 
@@ -585,8 +588,8 @@ function renderProductDetail() {
           <span></span>
         </div>
         ${product.comparison.map((entry) => `
-          <div class="compare-table-row" role="row">
-            <strong>${entry.marketplace}</strong>
+          <div class="compare-table-row ${lowestOffer && entry === lowestOffer ? 'best-offer-row' : ''}" role="row">
+            <strong>${entry.marketplace}${lowestOffer && entry === lowestOffer ? ' · Lowest entered price' : ''}</strong>
               <span style="font-weight: 700; color: var(--text);">${offerPriceLabel(entry)}</span>
               <span>${entry.discount !== null ? `<span class="discount-badge">-${entry.discount}%</span>` : '—'}</span>
               <span>${entry.verificationStatus === 'verified' ? (entry.availability || 'Availability needs verification') : 'Price needs verification'}</span>

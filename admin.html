@@ -60,16 +60,16 @@
       <section class="admin-panel admin-import-panel" aria-labelledby="affiliate-import-heading">
         <div class="admin-panel-heading">
           <div>
-            <span class="section-kicker">Authorized Import</span>
-            <h2 id="affiliate-import-heading">Import Product by Affiliate URL</h2>
-            <p>Paste an HTTPS product or affiliate URL. AIFRET uses only configured authorized provider APIs; if access is unavailable, complete the same form manually.</p>
+            <span class="section-kicker">Manual Product Entry</span>
+            <h2 id="affiliate-import-heading">Start Product from URL</h2>
+            <p>Enter an HTTPS product or affiliate URL to place it in the form, then complete the product details manually. Automatic marketplace fetching is not enabled.</p>
           </div>
         </div>
         <div class="admin-import-controls">
           <label class="admin-full">Affiliate or marketplace product URL
             <input type="url" data-import-url placeholder="https://www.amazon.in/dp/..." autocomplete="off" />
           </label>
-          <button type="button" class="btn btn-primary" data-import-fetch>Fetch Product Details</button>
+          <button type="button" class="btn btn-primary" data-import-fetch>Use URL in Product Form</button>
         </div>
         <p class="auth-status" data-import-status role="status" aria-live="polite"></p>
         <div class="admin-import-preview" data-import-preview hidden>
@@ -115,11 +115,6 @@
 
           <form data-admin-form novalidate>
             <div class="admin-form-grid">
-              <!-- Field 1: Product ID -->
-              <label>Product ID (Slug)
-                <input name="id" type="text" placeholder="e.g. noise-buds-x (leave blank to auto-generate)" />
-              </label>
-
               <!-- Field 2: Product Name -->
               <label>Product Name *
                 <input name="name" type="text" required placeholder="e.g. Noise Buds X" />
@@ -143,11 +138,6 @@
                   <option value="Home & Kitchen"></option>
                   <option value="Watches"></option>
                 </datalist>
-              </label>
-
-              <!-- Field 5: Subcategory -->
-              <label>Subcategory
-                <input name="subcategory" type="text" placeholder="e.g. Wireless Audio" />
               </label>
 
               <!-- Field 12: Primary Marketplace -->
@@ -187,86 +177,12 @@
               <label class="admin-full">Primary Affiliate URL
                 <input name="affiliate_url" type="url" placeholder="Optional tracking-enabled destination URL" />
               </label>
-
-              <!-- Field 6: Main Product Image -->
-              <label>Image URL
-                <input name="imageUrl" type="url" placeholder="https://example.com/product.jpg" data-admin-image-url />
-              </label>
-              <label>Upload Main Image File
-                <input type="file" accept="image/jpeg,image/png,image/webp" data-admin-image-file />
+              <label class="admin-full">Main Image *
+                <input name="imageUrl" type="url" required placeholder="https://example.com/product.jpg" />
               </label>
 
-              <div class="admin-full">
-                <div style="font-size: 0.8rem; font-weight: 700; color: var(--muted); margin-bottom: 4px;">Main Image Preview:</div>
-                <img class="admin-image-preview" data-admin-image-preview alt="Selected product preview" hidden />
-              </div>
-
-              <!-- Field 7: Additional Images -->
-              <label class="admin-full">Additional Image URLs (Comma separated or Upload below)
-                <input name="additionalImagesUrls" type="text" placeholder="https://image1.jpg, https://image2.jpg" data-admin-extra-urls />
-              </label>
-              <label class="admin-full">Upload Additional Images
-                <input type="file" accept="image/jpeg,image/png,image/webp" multiple data-admin-extra-files />
-              </label>
-              <div class="admin-full">
-                <div class="admin-gallery-preview" data-admin-extra-preview></div>
-              </div>
-
-              <!-- Field 8: Description -->
-              <label class="admin-full">Product Description *
-                <textarea name="description" rows="3" required placeholder="Describe product features, highlights and specs."></textarea>
-              </label>
-              <label class="admin-full">Short Description
-                <input name="short_description" type="text" maxlength="280" placeholder="One-line summary for product cards" />
-              </label>
-              <label class="admin-full">Detailed Description
-                <textarea name="detailed_description" rows="4" placeholder="Detailed product description"></textarea>
-              </label>
               <label>Model Number
                 <input name="model_number" type="text" placeholder="Optional model/SKU" />
-              </label>
-              <label>Manufacturer
-                <input name="manufacturer" type="text" placeholder="Optional" />
-              </label>
-              <label>Colour
-                <input name="color" type="text" placeholder="Optional" />
-              </label>
-              <label>Size / Variant
-                <input name="size" type="text" placeholder="Optional" />
-              </label>
-              <label>Material
-                <input name="material" type="text" placeholder="Optional" />
-              </label>
-              <label>Weight
-                <input name="weight" type="text" placeholder="Optional" />
-              </label>
-              <label>Dimensions
-                <input name="dimensions" type="text" placeholder="Optional" />
-              </label>
-              <label>Country of Origin
-                <input name="country_of_origin" type="text" placeholder="Optional" />
-              </label>
-              <label class="admin-full">Key Features (one per line)
-                <textarea name="key_features" rows="3" placeholder="Feature one\nFeature two"></textarea>
-              </label>
-              <label class="admin-full">Specifications (one key: value per line)
-                <textarea name="specifications" rows="3" placeholder="Battery: 5000mAh\nDisplay: 6.5 inch"></textarea>
-              </label>
-              <label class="admin-full">Product Video URL
-                <input name="product_video_url" type="url" placeholder="Optional approved product video URL" />
-              </label>
-              <label class="admin-full">Warranty Information
-                <input name="warranty_info" type="text" placeholder="Optional warranty details" />
-              </label>
-
-              <!-- Field 14: Rating -->
-              <label>Rating (0.0 to 5.0)
-                <input name="rating" type="number" min="0" max="5" step="0.1" value="4.5" />
-              </label>
-
-              <!-- Field 15: Review Count -->
-              <label>Review Count
-                <input name="review_count" type="number" min="0" step="1" value="1250" />
               </label>
 
               <!-- Field 16: Availability -->

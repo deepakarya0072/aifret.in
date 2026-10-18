@@ -282,6 +282,35 @@ function fillImportedProduct(product, sourceUrl, marketplace) {
   document.getElementById('product-form-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
+function detectMarketplaceFromUrl(sourceUrl) {
+  const hostname = new URL(sourceUrl).hostname.toLowerCase().replace(/^www\./, '');
+  if (hostname.endsWith('amazon.in') || hostname.endsWith('amazon.com') || hostname.endsWith('amzn.in')) return 'Amazon';
+  if (hostname.endsWith('flipkart.com') || hostname.endsWith('fkrt.it')) return 'Flipkart';
+  if (hostname.endsWith('meesho.com')) return 'Meesho';
+  if (hostname.endsWith('myntra.com')) return 'Myntra';
+  return 'Other Stores';
+}
+
+function handleManualImport() {
+  const sourceUrl = document.querySelector('[data-import-url]').value.trim();
+  if (!sourceUrl) {
+    setImportStatus('Paste an HTTPS marketplace or affiliate URL first.', 'danger');
+    return;
+  }
+  try {
+    const parsed = new URL(sourceUrl);
+    if (parsed.protocol !== 'https:') throw new Error('Use a valid HTTPS product or affiliate URL.');
+    const form = document.querySelector('[data-admin-form]');
+    form.elements.product_url.value = sourceUrl;
+    form.elements.marketplace.value = detectMarketplaceFromUrl(sourceUrl);
+    document.getElementById('product-form-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    form.elements.name.focus({ preventScroll: true });
+    setImportStatus('URL added. Enter the product details manually, then save or publish.', 'success');
+  } catch (error) {
+    setImportStatus(error.message || 'Enter a valid HTTPS URL.', 'danger');
+  }
+}
+
 async function handleImportFetch() {
   const urlInput = document.querySelector('[data-import-url]');
   const button = document.querySelector('[data-import-fetch]');
@@ -642,12 +671,9 @@ function populateFormForEdit(product) {
   editingProductId = product.id;
   const form = document.querySelector('[data-admin-form]');
 
-  form.elements.id.value = product.id || '';
-  form.elements.id.readOnly = true;
   form.elements.name.value = product.name || '';
   form.elements.brand.value = product.brand || '';
   form.elements.category.value = product.category || '';
-  form.elements.subcategory.value = product.subcategory || '';
   form.elements.marketplace.value = product.marketplace || 'Amazon';
   form.elements.mrp.value = product.mrp || '';
   form.elements.selling_price.value = product.selling_price || '';
@@ -659,41 +685,12 @@ function populateFormForEdit(product) {
   );
   form.elements.affiliate_url.value = primaryOffer?.affiliate_url || '';
   form.elements.imageUrl.value = product.image || '';
-  form.elements.description.value = product.description || '';
-  form.elements.short_description.value = product.short_description || '';
-  form.elements.detailed_description.value = product.detailed_description || product.description || '';
   form.elements.model_number.value = product.model_number || '';
-  form.elements.manufacturer.value = product.manufacturer || '';
-  form.elements.color.value = product.color || '';
-  form.elements.size.value = product.size || '';
-  form.elements.material.value = product.material || '';
-  form.elements.weight.value = product.weight || '';
-  form.elements.dimensions.value = product.dimensions || '';
-  form.elements.country_of_origin.value = product.country_of_origin || '';
-  form.elements.key_features.value = Array.isArray(product.key_features) ? product.key_features.join('\n') : '';
-  form.elements.specifications.value = formatSpecificationLines(product.specifications);
-  form.elements.product_video_url.value = product.product_video_url || '';
-  form.elements.warranty_info.value = product.warranty_info || '';
-  form.elements.rating.value = product.rating ?? 4.5;
-  form.elements.review_count.value = product.review_count ?? 1250;
   form.elements.availability.value = product.availability || 'In Stock';
   form.elements.stock_status.value = product.stock_status || 'in_stock';
   form.elements.status.value = product.status || 'active';
   form.elements.featured.checked = product.featured === 1 || product.featured === true;
   form.elements.best_value.checked = product.best_value === 1 || product.best_value === true;
-
-  selectedMainImage = product.image || '';
-  const mainPreview = document.querySelector('[data-admin-image-preview]');
-  if (selectedMainImage) {
-    mainPreview.src = selectedMainImage;
-    mainPreview.hidden = false;
-  } else {
-    mainPreview.hidden = true;
-  }
-
-  additionalImagesList = Array.isArray(product.additional_images) ? product.additional_images : [];
-  form.elements.additionalImagesUrls.value = additionalImagesList.join(', ');
-  renderExtraPreviews();
 
   updateDiscountCalculation();
 
@@ -715,11 +712,8 @@ function resetProductForm() {
 
   const form = document.querySelector('[data-admin-form]');
   form.reset();
-  form.elements.id.readOnly = false;
   form.elements.discount.value = '';
   form.elements.status.value = 'inactive';
-  document.querySelector('[data-admin-image-preview]').hidden = true;
-  document.querySelector('[data-admin-extra-preview]').innerHTML = '';
   renderOffersList([]);
 
   document.querySelector('[data-admin-form-title]').textContent = 'Add New Product';
@@ -742,24 +736,19 @@ async function handleProductSubmit(event) {
   const name = form.elements.name.value.trim();
   const brand = form.elements.brand.value.trim();
   const category = form.elements.category.value.trim();
-  const subcategory = form.elements.subcategory.value.trim();
   const marketplace = form.elements.marketplace.value.trim();
   const mrp = parseFloat(form.elements.mrp.value);
   const selling_price = parseFloat(form.elements.selling_price.value);
   const product_url = form.elements.product_url.value.trim();
-  const imageUrl = form.elements.imageUrl.value.trim() || selectedMainImage;
-  const description = form.elements.description.value.trim();
-  const rating = parseFloat(form.elements.rating.value) || 4.5;
-  const review_count = parseInt(form.elements.review_count.value) || 0;
+  const imageUrl = form.elements.imageUrl.value.trim();
   const availability = form.elements.availability.value.trim() || 'In Stock';
   const stock_status = form.elements.stock_status.value;
   const featured = form.elements.featured.checked ? 1 : 0;
   const best_value = form.elements.best_value.checked ? 1 : 0;
-  const id = form.elements.id.value.trim();
 
   // Validation
   const status = form.elements.status.value;
-  if (!name || !brand || !category || !description || !marketplace || !product_url || (status === 'active' && !imageUrl)) {
+  if (!name || !brand || !category || !marketplace || !product_url || !imageUrl) {
     statusEl.textContent = 'Please fill out all required fields marked with *.';
     statusEl.style.color = 'var(--danger)';
     return;
@@ -775,11 +764,10 @@ async function handleProductSubmit(event) {
   const extraOffers = collectOffers();
 
   const payload = {
-    id: id || undefined,
     name,
     brand,
     category,
-    subcategory,
+    subcategory: '',
     marketplace,
     mrp,
     selling_price,
@@ -787,25 +775,25 @@ async function handleProductSubmit(event) {
     product_url,
     affiliate_url: form.elements.affiliate_url.value.trim(),
     image: imageUrl,
-    additional_images: additionalImagesList,
-    description,
-    short_description: form.elements.short_description.value.trim(),
-    detailed_description: form.elements.detailed_description.value.trim() || description,
-    key_features: parseLineList(form.elements.key_features.value),
-    specifications: parseSpecificationLines(form.elements.specifications.value),
+    additional_images: [],
+    description: '',
+    short_description: '',
+    detailed_description: '',
+    key_features: [],
+    specifications: {},
     model_number: form.elements.model_number.value.trim(),
-    variants: parseLineList(form.elements.size.value),
-    color: form.elements.color.value.trim(),
-    size: form.elements.size.value.trim(),
-    material: form.elements.material.value.trim(),
-    weight: form.elements.weight.value.trim(),
-    dimensions: form.elements.dimensions.value.trim(),
-    manufacturer: form.elements.manufacturer.value.trim(),
-    country_of_origin: form.elements.country_of_origin.value.trim(),
-    product_video_url: form.elements.product_video_url.value.trim(),
-    warranty_info: form.elements.warranty_info.value.trim(),
-    rating,
-    review_count,
+    variants: [],
+    color: '',
+    size: '',
+    material: '',
+    weight: '',
+    dimensions: '',
+    manufacturer: '',
+    country_of_origin: '',
+    product_video_url: '',
+    warranty_info: '',
+    rating: 0,
+    review_count: 0,
     availability,
     stock_status,
     status,
@@ -957,11 +945,11 @@ document.addEventListener('DOMContentLoaded', () => {
     document.querySelector('[data-admin-form] [name="name"]').focus({ preventScroll: true });
   });
 
-  document.querySelector('[data-import-fetch]').addEventListener('click', handleImportFetch);
+  document.querySelector('[data-import-fetch]').addEventListener('click', handleManualImport);
   document.querySelector('[data-import-url]').addEventListener('keydown', (event) => {
     if (event.key === 'Enter') {
       event.preventDefault();
-      handleImportFetch();
+      handleManualImport();
     }
   });
 
@@ -980,9 +968,6 @@ document.addEventListener('DOMContentLoaded', () => {
       e.target.closest('[data-offer-row]').remove();
     }
   });
-
-  // Image upload handlers
-  setupImageHandlers();
 
   // Product form submit
   document.querySelector('[data-admin-form]').addEventListener('submit', handleProductSubmit);
