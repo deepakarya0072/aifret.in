@@ -358,6 +358,16 @@ function normalizeCurrency(value) {
   return currency;
 }
 
+function parseJsonOrDefault(value, fallback) {
+  if (value === null || value === undefined || value === '') return fallback;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed === null || parsed === undefined ? fallback : parsed;
+  } catch {
+    return fallback;
+  }
+}
+
 async function productWithOffers(db, id) {
   const product = await db.prepare('SELECT * FROM products WHERE id = ?').bind(id).first();
   if (!product) return null;
@@ -655,11 +665,11 @@ async function updateProduct(productId, body, env, db, admin) {
   const description = String(body.description ?? existing.description).trim();
   const shortDescription = String(body.short_description ?? existing.short_description ?? '').trim();
   const detailedDescription = String(body.detailed_description ?? existing.detailed_description ?? description).trim();
-  const keyFeatures = Array.isArray(body.key_features) ? body.key_features : JSON.parse(existing.key_features || '[]');
+  const keyFeatures = Array.isArray(body.key_features) ? body.key_features : parseJsonOrDefault(existing.key_features, []);
   const specifications = body.specifications && typeof body.specifications === 'object' && !Array.isArray(body.specifications)
-    ? body.specifications : JSON.parse(existing.specifications || '{}');
+    ? body.specifications : parseJsonOrDefault(existing.specifications, {});
   const modelNumber = String(body.model_number ?? existing.model_number ?? '').trim();
-  const variants = Array.isArray(body.variants) ? body.variants : JSON.parse(existing.variants || '[]');
+  const variants = Array.isArray(body.variants) ? body.variants : parseJsonOrDefault(existing.variants, []);
   const color = String(body.color ?? existing.color ?? '').trim();
   const size = String(body.size ?? existing.size ?? '').trim();
   const material = String(body.material ?? existing.material ?? '').trim();
@@ -670,7 +680,7 @@ async function updateProduct(productId, body, env, db, admin) {
   const productVideoUrl = validateWebUrl(body.product_video_url ?? existing.product_video_url, 'Product video URL', false);
   const warrantyInfo = String(body.warranty_info ?? existing.warranty_info ?? '').trim();
   const image = validateImageReference(body.image ?? existing.image);
-  const additionalImages = body.additional_images ?? JSON.parse(existing.additional_images || '[]');
+  const additionalImages = body.additional_images ?? parseJsonOrDefault(existing.additional_images, []);
   if (!Array.isArray(additionalImages)) throw new Error('Additional images must be a list of image URLs');
   const parsedImages = additionalImages.map(validateImageReference);
   const marketplace = String(body.marketplace ?? existing.marketplace).trim();
@@ -726,7 +736,14 @@ async function updateProduct(productId, body, env, db, admin) {
       VALUES (?, ?, ?, 'update', 'product', ?, '{}', ?)`,
     values: [`audit-${randomHex(8)}`, admin.user_id, admin.username, productId, now()]
   });
-  await db.batch(statements.map((statement) => db.prepare(statement.sql).bind(...statement.values)));
+  try {
+    await db.batch(statements.map((statement) => db.prepare(statement.sql).bind(...statement.values)));
+  } catch (error) {
+    if (/unique|constraint/i.test(error.message)) {
+      throw Object.assign(new Error('The product update conflicts with an existing catalogue record'), { status: 409 });
+    }
+    throw error;
+  }
   return json({ success: true, product: await productWithOffers(db, productId) });
 }
 

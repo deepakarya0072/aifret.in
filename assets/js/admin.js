@@ -738,6 +738,7 @@ function renderExtraPreviews() {
 
 function populateFormForEdit(product) {
   editingProductId = product.id;
+  selectedMainImage = '';
   const form = document.querySelector('[data-admin-form]');
 
   form.elements.name.value = product.name || '';
@@ -760,6 +761,8 @@ function populateFormForEdit(product) {
     selectedMainImage = product.image;
     mainPreview.src = product.image;
     mainPreviewWrap.hidden = false;
+  } else if (mainPreviewWrap) {
+    mainPreviewWrap.hidden = true;
   }
   form.elements.model_number.value = product.model_number || '';
   form.elements.availability.value = product.availability || 'In Stock';
