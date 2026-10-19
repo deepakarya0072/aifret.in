@@ -36,7 +36,7 @@ async function fetchProductsFromApi() {
     const res = await fetch('/api/products?status=active&limit=500');
     if (res.ok) {
       const data = await res.json();
-      if (Array.isArray(data.products) && data.products.length > 0) {
+      if (Array.isArray(data.products)) {
         liveProducts = data.products;
         apiLoaded = true;
         try {
@@ -52,8 +52,6 @@ async function fetchProductsFromApi() {
         renderProductDetail();
         renderDealsPage();
         renderComparePage();
-      } else if (Array.isArray(data.products)) {
-        console.info('The product API has no published products; using the existing catalog fallback.');
       }
     }
   } catch (err) {
@@ -99,6 +97,39 @@ function isValidMediaUrl(value) {
   return /^https?:\/\//i.test(value || '');
 }
 
+function validNumber(value, min = 0, max = Number.POSITIVE_INFINITY) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= min && number <= max ? number : null;
+}
+
+function calculateDiscount(mrp, sellingPrice, suppliedDiscount = null) {
+  const validMrp = validNumber(mrp, Number.MIN_VALUE);
+  const validSellingPrice = validNumber(sellingPrice, Number.MIN_VALUE);
+  if (validMrp && validSellingPrice) {
+    return validMrp > validSellingPrice
+      ? Math.round(((validMrp - validSellingPrice) / validMrp) * 100)
+      : 0;
+  }
+  const fallback = validNumber(suppliedDiscount, 0, 100);
+  return fallback ?? 0;
+}
+
+function uniqueProducts(products) {
+  const seen = new Set();
+  return products.filter((product) => {
+    const id = String(product?.id || '').trim();
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+function externalDealUrl(offer, product = {}) {
+  if (offer?.buyUrl && isValidExternalUrl(offer.buyUrl)) return offer.buyUrl;
+  if (isValidExternalUrl(product.product_url)) return product.product_url;
+  return '';
+}
+
 function supportsPhotoPreview(product) {
   return ['fashion', 'shoes', 'beauty', 'watches', 'jewellery', 'accessories'].includes((product.slug || product.category || '').toLowerCase());
 }
@@ -141,7 +172,7 @@ function normalizeProduct(product) {
       price: Number.isFinite(Number(entry.price)) && Number(entry.price) > 0 ? Number(entry.price) : null,
       originalPrice: Number.isFinite(Number(entry.mrp ?? entry.originalPrice ?? product.mrp ?? product.originalPrice))
         ? Number(entry.mrp ?? entry.originalPrice ?? product.mrp ?? product.originalPrice) : null,
-      discount: Number.isFinite(Number(entry.discount)) ? Number(entry.discount) : null,
+      discount: calculateDiscount(entry.mrp ?? product.mrp, entry.price, entry.discount),
       url: offerUrl,
       buyUrl: isValidExternalUrl(entry.affiliate_url || entry.affiliateUrl)
         ? (entry.affiliate_url || entry.affiliateUrl)
@@ -171,12 +202,12 @@ function normalizeProduct(product) {
     productImage: product.image || product.productImage || '',
     price: Number.isFinite(Number(product.selling_price ?? product.price)) ? Number(product.selling_price ?? product.price) : null,
     selling_price: Number(product.selling_price ?? product.price),
-    originalPrice: Number.isFinite(Number(product.mrp ?? product.originalPrice)) ? Number(product.mrp ?? product.originalPrice) : null,
+    originalPrice: validNumber(product.mrp ?? product.originalPrice, Number.MIN_VALUE),
     mrp: Number(product.mrp ?? product.originalPrice),
     currentPrice: Number(product.selling_price ?? product.price),
     oldPrice: Number(product.mrp ?? product.originalPrice),
-    discount: Number(product.discount || 0),
-    rating: Number(product.rating || 4.5),
+    discount: calculateDiscount(product.mrp ?? product.originalPrice, product.selling_price ?? product.price, product.discount),
+    rating: validNumber(product.rating, 0, 5) ?? '—',
     reviews: Number(product.review_count || product.reviews || 0),
     review_count: Number(product.review_count || product.reviews || 0),
     availability: product.availability || 'In Stock',
@@ -225,10 +256,10 @@ function renderHeroShowcase() {
   const normalized = normalizeProduct(bestProduct);
   const bestOffer = getBestOffer(normalized);
   const fallbackImg = PRODUCT_PLACEHOLDER;
-  const dealUrl = bestOffer.buyUrl || bestOffer.url || normalized.product_url || `product.html?id=${normalized.id}`;
+  const dealUrl = externalDealUrl(bestOffer, normalized);
 
   // Mini stack items from other active products
-  const miniStack = products.filter((p) => p.id !== bestProduct.id).slice(0, 2);
+  const miniStack = uniqueProducts(products).filter((p) => p.id !== bestProduct.id).slice(0, 2);
 
   root.innerHTML = `
     <article class="showcase-card large">
@@ -245,12 +276,12 @@ function renderHeroShowcase() {
         <div>
           <a href="product.html?id=${normalized.id}" style="color: inherit;"><p style="font-weight: 700; margin: 0 0 4px;">${normalized.name}</p></a>
           <strong>${formatPrice(bestOffer.price)}</strong>
-          <small style="display:block; text-decoration: line-through; color: var(--muted); font-size: 0.78rem;">MRP ${formatPrice(normalized.originalPrice)}</small>
+            ${normalized.originalPrice > bestOffer.price ? `<small style="display:block; text-decoration: line-through; color: var(--muted); font-size: 0.78rem;">MRP ${formatPrice(normalized.originalPrice)}</small>` : ''}
         </div>
         <div style="text-align: right;">
-          <span class="discount-badge" style="font-size: 0.88rem;">${normalized.discount}% OFF</span>
+          ${normalized.discount > 0 ? `<span class="discount-badge" style="font-size: 0.88rem;">${normalized.discount}% OFF</span>` : ''}
           <div style="margin-top: 8px;">
-            <a href="${dealUrl}" class="btn btn-primary btn-small" target="_blank" rel="noopener noreferrer">View Deal</a>
+            ${dealUrl ? `<a href="${dealUrl}" class="btn btn-primary btn-small" target="_blank" rel="noopener noreferrer">View Deal</a>` : '<span class="btn btn-secondary btn-small" aria-disabled="true">Deal unavailable</span>'}
           </div>
         </div>
       </div>
@@ -367,7 +398,7 @@ function renderProductCard(product, mode = 'featured') {
   const isCompact = mode === 'compact';
   const hasProductVideo = product.videoStatus === 'ready' && isValidMediaUrl(product.productVideoUrl);
   const fallbackImage = PRODUCT_PLACEHOLDER;
-  const dealUrl = bestOffer.buyUrl || bestOffer.url || product.product_url || `product.html?id=${product.id}`;
+  const dealUrl = externalDealUrl(bestOffer, product);
 
   return `
     <article class="${isCompact ? 'deal-card' : 'product-card'}">
@@ -396,16 +427,16 @@ function renderProductCard(product, mode = 'featured') {
 
         <div class="price-row">
           <strong>${formatPrice(bestOffer.price)}</strong>
-          <span>${formatPrice(product.originalPrice || product.mrp)}</span>
+          ${product.originalPrice > bestOffer.price ? `<span>${formatPrice(product.originalPrice)}</span>` : ''}
         </div>
 
         <div class="discount-line">
-          <span class="discount-badge">-${product.discount}%</span>
+          ${product.discount > 0 ? `<span class="discount-badge">${product.discount}% OFF</span>` : ''}
           <small>Best price from ${bestOffer.marketplace}</small>
         </div>
 
         <div class="card-actions" style="display: flex; gap: 8px;">
-          <a href="${dealUrl}" class="btn btn-primary" target="_blank" rel="noopener noreferrer" style="flex: 1;">View Deal</a>
+          ${dealUrl ? `<a href="${dealUrl}" class="btn btn-primary" target="_blank" rel="noopener noreferrer" style="flex: 1;">View Deal</a>` : '<span class="btn btn-secondary" aria-disabled="true" style="flex: 1;">Deal unavailable</span>'}
           <a href="product.html?id=${product.id}" class="btn btn-secondary btn-small" title="Compare Prices across stores">Compare</a>
         </div>
       </div>
@@ -417,10 +448,14 @@ function renderFeaturedProducts() {
   const root = document.querySelector('[data-featured-grid]');
   if (!root) return;
 
-  const products = getProducts()
+  const products = uniqueProducts(getProducts())
     .filter((product) => product.status !== 'inactive' && (product.featured === 1 || product.featured === true || product.isFeatured !== false))
     .slice(0, 4);
 
+  if (!products.length) {
+    root.innerHTML = '<div class="empty-state"><h3>No featured products yet</h3><p>Published products will appear here when they are added.</p></div>';
+    return;
+  }
   root.innerHTML = products.map((product) => renderProductCard(normalizeProduct(product), 'featured')).join('');
 }
 
@@ -428,10 +463,14 @@ function renderDealsCards(targetSelector = '[data-deals-grid]') {
   const root = document.querySelector(targetSelector);
   if (!root) return;
 
-  const deals = getProducts()
+  const deals = uniqueProducts(getProducts())
     .filter((product) => product.status !== 'inactive' && product.isDeal !== false)
     .slice(0, 6);
 
+  if (!deals.length) {
+    root.innerHTML = '<div class="empty-state"><h3>No published deals yet</h3><p>Published products will appear here when they are added.</p></div>';
+    return;
+  }
   root.innerHTML = deals.map((product) => renderProductCard(normalizeProduct(product), 'compact')).join('');
 }
 
@@ -439,15 +478,19 @@ function renderHomeComparison() {
   const root = document.querySelector('[data-home-compare]');
   if (!root) return;
 
-  const products = getProducts().filter((p) => p.status !== 'inactive').slice(0, 4);
+  const products = uniqueProducts(getProducts()).filter((p) => p.status !== 'inactive').slice(0, 4);
+  if (!products.length) {
+    root.innerHTML = '<div class="empty-state"><h3>No products available for comparison</h3><p>Published products with marketplace offers will appear here.</p></div>';
+    return;
+  }
   root.innerHTML = products.map((product) => {
     const normalized = normalizeProduct(product);
     const offerRows = normalized.comparison.map((entry) => `
       <div class="compare-offer">
         <span>${entry.marketplace}</span>
         <strong>${formatPrice(entry.price)}</strong>
-        <small>${entry.discount}% off</small>
-        <a href="${entry.buyUrl || entry.url}" class="btn btn-secondary btn-small" target="_blank" rel="noopener noreferrer">View Deal</a>
+        ${entry.discount > 0 ? `<small>${entry.discount}% OFF</small>` : ''}
+        ${externalDealUrl(entry, normalized) ? `<a href="${externalDealUrl(entry, normalized)}" class="btn btn-secondary btn-small" target="_blank" rel="noopener noreferrer">View Deal</a>` : '<span class="btn btn-secondary btn-small" aria-disabled="true">Deal unavailable</span>'}
       </div>
     `).join('');
 
