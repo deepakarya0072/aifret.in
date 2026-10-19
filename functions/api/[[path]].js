@@ -313,11 +313,11 @@ function validateImageReference(value) {
 function rejectProductDestinationAsImage(imageUrl, productUrl) {
   if (!imageUrl) return;
   if (productUrl && imageUrl === productUrl) {
-    throw new Error('Main image URL must point to an image, not the marketplace product page');
+    throw Object.assign(new Error('Main image URL must point to an image, not the marketplace product page'), { status: 400 });
   }
   const hostname = new URL(imageUrl).hostname.toLowerCase().replace(/\.$/, '');
   if (['amzn.in', 'amzn.to', 'a.co', 'link.amazon', 'fkrt.it'].includes(hostname)) {
-    throw new Error('Main image URL must point to an image, not a marketplace short link');
+    throw Object.assign(new Error('Main image URL must point to an image, not a marketplace short link'), { status: 400 });
   }
 }
 

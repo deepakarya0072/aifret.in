@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
 import { webcrypto } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 
 class MemoryD1 {
   admins = [];
@@ -73,11 +74,100 @@ class MemoryD1 {
   }
 }
 
+class SqliteD1 {
+  constructor(schema) {
+    this.sqlite = new DatabaseSync(':memory:');
+    this.sqlite.exec(schema);
+  }
+
+  prepare(query) {
+    const values = [];
+    const statement = {
+      bind: (...bound) => {
+        values.push(...bound);
+        return statement;
+      },
+      first: async () => this.sqlite.prepare(query).get(...values) || null,
+      all: async () => ({ results: this.sqlite.prepare(query).all(...values) }),
+      run: async () => this.sqlite.prepare(query).run(...values)
+    };
+    return statement;
+  }
+
+  async batch(statements) {
+    for (const statement of statements) await statement.run();
+    return { success: true };
+  }
+}
+
 const workerText = await readFile(new URL('../functions/api/[[path]].js', import.meta.url), 'utf8');
 test('product creation SQL keeps D1 product columns and placeholders aligned', () => {
   const insert = workerText.match(/INSERT INTO products \([\s\S]*?\) VALUES \([\s\S]*?\)`/i);
   assert.ok(insert, 'product creation INSERT statement should exist');
   assert.equal((insert[0].match(/\?/g) || []).length, 39);
+});
+
+test('product update SQL keeps D1 product columns and placeholders aligned', () => {
+  const update = workerText.match(/UPDATE products SET[\s\S]*?WHERE id=\?/i);
+  assert.ok(update, 'product update UPDATE statement should exist');
+  assert.equal((update[0].match(/\?/g) || []).length, 37);
+});
+
+test('PUT product update succeeds against a real SQLite schema and updates offers atomically', async () => {
+  const schema = [
+    await readFile(new URL('../migrations/0001_cloudflare_schema.sql', import.meta.url), 'utf8'),
+    await readFile(new URL('../migrations/0002_affiliate_import_currency.sql', import.meta.url), 'utf8')
+  ];
+  const db = new SqliteD1(schema.join('\n'));
+  const token = 'test-update-session';
+  const tokenHash = Buffer.from(await webcrypto.subtle.digest('SHA-256', new TextEncoder().encode(token))).toString('hex');
+  const timestamp = new Date().toISOString();
+  db.sqlite.prepare('INSERT INTO admin_users (id, username, password_hash, salt, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run('admin-1', 'test-admin', 'unused', 'unused', timestamp);
+  db.sqlite.prepare('INSERT INTO admin_sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)')
+    .run(tokenHash, 'admin-1', timestamp, '2999-01-01T00:00:00.000Z');
+  db.sqlite.prepare(`INSERT INTO products
+    (id, name, brand, category, subcategory, description, key_features, specifications,
+     variants, image, additional_images, mrp, selling_price, discount, marketplace,
+     product_url, rating, review_count, availability, stock_status, featured, best_value,
+     status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run('collared-neck-5bdc30', 'Collared Neck', 'AIFRET', 'Fashion', '', '', '["old"]', '{"old":true}',
+      '[]', 'https://images.example.test/collared.jpg', '[]', 2199, 638, 71, 'Amazon',
+      'https://www.amazon.in/dp/TEST', 0, 0, 'In Stock', 'in_stock', 1, 1, 'active', timestamp, timestamp);
+  db.sqlite.prepare(`INSERT INTO product_offers
+    (id, product_id, marketplace, price, mrp, product_url, affiliate_url, availability, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run('offer-old', 'collared-neck-5bdc30', 'Amazon', 638, 2199, 'https://www.amazon.in/dp/TEST',
+      'https://www.amazon.in/dp/TEST?tag=aifret-21', 'In Stock', timestamp);
+
+  const response = await request({ AIFRET_DB: db }, '/api/products/collared-neck-5bdc30', {
+    method: 'PUT',
+    cookie: `aifret_session=${token}`,
+    body: {
+      name: 'Collared Neck Updated', brand: 'AIFRET', category: 'Fashion', marketplace: 'Amazon',
+      mrp: 2499, selling_price: 749, product_url: 'https://www.amazon.in/dp/TEST',
+      affiliate_url: 'https://www.amazon.in/dp/TEST?tag=aifret-21', image: 'https://images.example.test/collared.jpg',
+      stock_status: 'in_stock', status: 'active', featured: 1, best_value: 1,
+      offers: [{ marketplace: 'Flipkart', price: 799, mrp: 2499,
+        product_url: 'https://www.flipkart.com/item/TEST', affiliate_url: 'https://www.flipkart.com/item/TEST?affid=aifret' }]
+    }
+  });
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.equal(result.success, true);
+  assert.equal(result.product.name, 'Collared Neck Updated');
+  assert.equal(result.product.discount, 70);
+  assert.deepEqual(result.product.offers.map((offer) => offer.marketplace), ['Amazon', 'Flipkart']);
+
+  const invalidImage = await request({ AIFRET_DB: db }, '/api/products/collared-neck-5bdc30', {
+    method: 'PUT', cookie: `aifret_session=${token}`,
+    body: { image: 'https://amzn.in/d/08klyARP', status: 'active' }
+  });
+  assert.equal(invalidImage.status, 400);
+  const invalidImageResult = await invalidImage.json();
+  assert.match(invalidImageResult.message, /marketplace short link/i);
+  assert.equal('stack' in invalidImageResult, false);
 });
 const runnableWorker = workerText
   .replace('export async function onRequest(context)', 'async function onRequest(context)')
