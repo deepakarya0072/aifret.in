@@ -168,6 +168,9 @@ test('PUT product update succeeds against a real SQLite schema and updates offer
   const invalidImageResult = await invalidImage.json();
   assert.match(invalidImageResult.message, /marketplace short link/i);
   assert.equal('stack' in invalidImageResult, false);
+  const unchanged = db.sqlite.prepare('SELECT image, name FROM products WHERE id = ?').get('collared-neck-5bdc30');
+  assert.equal(unchanged.image, 'https://images.example.test/collared.jpg');
+  assert.equal(unchanged.name, 'Collared Neck Updated');
 });
 const runnableWorker = workerText
   .replace('export async function onRequest(context)', 'async function onRequest(context)')

@@ -834,9 +834,20 @@ async function handleProductSubmit(event) {
 
   // Validation
   const status = form.elements.status.value;
-  if (!name || !brand || !category || !marketplace || !product_url || (status === 'active' && !imageUrl)) {
+  if (!name || !brand || !category || !marketplace || !product_url) {
     statusEl.textContent = 'Please fill out all required fields marked with *.';
     statusEl.style.color = 'var(--danger)';
+    return;
+  }
+
+  if (status === 'active' && !imageUrl) {
+    statusEl.textContent = 'Main image is required before publishing. Upload it in the Main Image section; Additional Product Images do not count.';
+    statusEl.style.color = 'var(--danger)';
+    const mainImageUrl = form.elements.imageUrl;
+    if (mainImageUrl) {
+      mainImageUrl.setAttribute('aria-invalid', 'true');
+      mainImageUrl.focus();
+    }
     return;
   }
 
