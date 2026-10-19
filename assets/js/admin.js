@@ -7,6 +7,7 @@ let adminProducts = [];
 let editingProductId = null;
 let selectedMainImage = '';
 let additionalImagesList = [];
+const PRODUCT_PLACEHOLDER = '/assets/images/product-placeholder.svg';
 let pendingDeleteProductId = null;
 let adminOffset = 0;
 let adminTotal = 0;
@@ -394,7 +395,7 @@ function renderProductTable() {
     const isFeatured = p.featured === 1 || p.featured === true;
     const isBest = p.best_value === 1 || p.best_value === true;
     const extraOffersCount = (p.offers || p.comparison || []).length;
-    const fallbackImage = 'https://images.unsplash.com/photo-1524758631624-e2822e304c36?auto=format&fit=crop&w=200&q=80';
+    const fallbackImage = PRODUCT_PLACEHOLDER;
 
     return `
       <tr data-prod-id="${escapeHtml(p.id)}">

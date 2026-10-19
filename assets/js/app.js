@@ -12,6 +12,7 @@ const currency = new Intl.NumberFormat('en-IN', {
 });
 
 const PRODUCTS_STORAGE_KEY = 'aifret.products.v1';
+const PRODUCT_PLACEHOLDER = '/assets/images/product-placeholder.svg';
 let liveProducts = [];
 let apiLoaded = false;
 
@@ -165,7 +166,7 @@ function normalizeProduct(product) {
     subcategory: product.subcategory || '',
     slug: product.slug || catSlug,
     description: product.description || '',
-    image: product.image || product.productImage || '',
+    image: product.image || product.productImage || PRODUCT_PLACEHOLDER,
     additional_images: Array.isArray(product.additional_images) ? product.additional_images : [],
     productImage: product.image || product.productImage || '',
     price: Number.isFinite(Number(product.selling_price ?? product.price)) ? Number(product.selling_price ?? product.price) : null,
@@ -223,7 +224,7 @@ function renderHeroShowcase() {
   const bestProduct = products.find((p) => p.best_value === 1 || p.best_value === true) || products[0];
   const normalized = normalizeProduct(bestProduct);
   const bestOffer = getBestOffer(normalized);
-  const fallbackImg = 'https://images.unsplash.com/photo-1546435770-a3e426bf472b?auto=format&fit=crop&w=900&q=80';
+  const fallbackImg = PRODUCT_PLACEHOLDER;
   const dealUrl = bestOffer.buyUrl || bestOffer.url || normalized.product_url || `product.html?id=${normalized.id}`;
 
   // Mini stack items from other active products
@@ -365,7 +366,7 @@ function renderProductCard(product, mode = 'featured') {
   const bestOffer = getBestOffer(product);
   const isCompact = mode === 'compact';
   const hasProductVideo = product.videoStatus === 'ready' && isValidMediaUrl(product.productVideoUrl);
-  const fallbackImage = 'https://images.unsplash.com/photo-1524758631624-e2822e304c36?auto=format&fit=crop&w=900&q=80';
+  const fallbackImage = PRODUCT_PLACEHOLDER;
   const dealUrl = bestOffer.buyUrl || bestOffer.url || product.product_url || `product.html?id=${product.id}`;
 
   return `
@@ -485,7 +486,7 @@ function renderProductDetail() {
 
   const productActionUrl = `/product.html?id=${encodeURIComponent(product.id)}${selectedOffer.marketplaceSlug ? `&marketplace=${encodeURIComponent(selectedOffer.marketplaceSlug)}` : ''}`;
   const hasProductVideo = product.videoStatus === 'ready' && isValidMediaUrl(product.productVideoUrl);
-  const fallbackImage = 'https://images.unsplash.com/photo-1524758631624-e2822e304c36?auto=format&fit=crop&w=900&q=80';
+  const fallbackImage = PRODUCT_PLACEHOLDER;
 
   // Additional images
   const allImages = [product.image, ...(product.additional_images || [])].filter(Boolean);
