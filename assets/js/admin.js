@@ -219,6 +219,17 @@ function populateFilterDropdowns(categories = [], marketplaces = []) {
   ).join('');
 }
 
+function isRejectedImageReference(value) {
+  if (!value) return false;
+  if (/^\/api\/uploads\//.test(value) || /^\/uploads\//.test(value)) return false;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol !== 'https:' || ['amzn.in', 'amzn.to', 'a.co', 'link.amazon', 'fkrt.it'].includes(parsed.hostname.toLowerCase().replace(/\.$/, ''));
+  } catch {
+    return true;
+  }
+}
+
 function setImportStatus(message, tone = 'muted') {
   const status = document.querySelector('[data-import-status]');
   if (!status) return;
@@ -260,7 +271,7 @@ function fillImportedProduct(product, sourceUrl, marketplace) {
   set('dimensions', product.dimensions);
   set('country_of_origin', product.country_of_origin);
   set('availability', product.availability);
-  set('imageUrl', product.image);
+  set('imageUrl', isRejectedImageReference(product.image) ? '' : product.image);
   set('mrp', product.mrp);
   set('discount', product.discount);
   set('selling_price', product.price);
@@ -268,7 +279,7 @@ function fillImportedProduct(product, sourceUrl, marketplace) {
   set('key_features', formatImportedLines(product.key_features));
   set('specifications', formatImportedSpecifications(product.specifications));
   set('variants', formatImportedLines(product.variants));
-  if (product.image) {
+  if (product.image && !isRejectedImageReference(product.image)) {
     selectedMainImage = product.image;
     const preview = document.querySelector('[data-admin-image-preview]');
     preview.src = product.image;
@@ -583,10 +594,24 @@ function setupImageHandlers() {
   if (!mainFileInput || !mainUrlInput || !mainPreview || !mainPreviewWrap || !mainDropzone || !mainRemoveButton || !statusEl) return;
 
   const showMainPreview = (url) => {
+    if (url && isRejectedImageReference(url)) {
+      selectedMainImage = '';
+      mainUrlInput.value = '';
+      mainPreviewWrap.hidden = true;
+      statusEl.textContent = 'Use a direct HTTPS image URL or upload an image file. Marketplace product links cannot be used as images.';
+      statusEl.style.color = 'var(--danger)';
+      return;
+    }
     selectedMainImage = url;
     mainUrlInput.value = url;
     mainPreview.src = url;
     mainPreviewWrap.hidden = !url;
+    mainPreview.onerror = () => {
+      selectedMainImage = '';
+      mainPreviewWrap.hidden = true;
+      statusEl.textContent = 'This image could not be loaded. Upload a file or use another direct image URL.';
+      statusEl.style.color = 'var(--danger)';
+    };
   };
 
   const uploadMainFile = async (file) => {
@@ -728,10 +753,10 @@ function populateFormForEdit(product) {
     (offer.marketplace || '').toLowerCase() === (product.marketplace || '').toLowerCase()
   );
   form.elements.affiliate_url.value = primaryOffer?.affiliate_url || '';
-  form.elements.imageUrl.value = product.image || '';
+  form.elements.imageUrl.value = isRejectedImageReference(product.image) ? '' : (product.image || '');
   const mainPreview = document.querySelector('[data-admin-image-preview]');
   const mainPreviewWrap = document.querySelector('[data-admin-image-preview-wrap]');
-  if (mainPreview && mainPreviewWrap && product.image) {
+  if (mainPreview && mainPreviewWrap && product.image && !isRejectedImageReference(product.image)) {
     selectedMainImage = product.image;
     mainPreview.src = product.image;
     mainPreviewWrap.hidden = false;

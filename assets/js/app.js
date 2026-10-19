@@ -97,6 +97,22 @@ function isValidMediaUrl(value) {
   return /^https?:\/\//i.test(value || '');
 }
 
+function isRejectedImageReference(value) {
+  if (/^\/api\/uploads\//.test(value || '')) return false;
+  if (!isValidMediaUrl(value)) return true;
+  try {
+    const hostname = new URL(value).hostname.toLowerCase().replace(/\.$/, '');
+    return ['amzn.in', 'amzn.to', 'a.co', 'link.amazon', 'fkrt.it'].includes(hostname);
+  } catch {
+    return true;
+  }
+}
+
+function resolveProductImage(product) {
+  const candidates = [product.image, product.image_url, product.imageUrl, product.thumbnail, product.productImage];
+  return candidates.find((value) => typeof value === 'string' && value.trim() && !isRejectedImageReference(value.trim())) || PRODUCT_PLACEHOLDER;
+}
+
 function validNumber(value, min = 0, max = Number.POSITIVE_INFINITY) {
   const number = Number(value);
   return Number.isFinite(number) && number >= min && number <= max ? number : null;
@@ -197,9 +213,9 @@ function normalizeProduct(product) {
     subcategory: product.subcategory || '',
     slug: product.slug || catSlug,
     description: product.description || '',
-    image: product.image || product.productImage || PRODUCT_PLACEHOLDER,
+    image: resolveProductImage(product),
     additional_images: Array.isArray(product.additional_images) ? product.additional_images : [],
-    productImage: product.image || product.productImage || '',
+    productImage: resolveProductImage(product) === PRODUCT_PLACEHOLDER ? '' : resolveProductImage(product),
     price: Number.isFinite(Number(product.selling_price ?? product.price)) ? Number(product.selling_price ?? product.price) : null,
     selling_price: Number(product.selling_price ?? product.price),
     originalPrice: validNumber(product.mrp ?? product.originalPrice, Number.MIN_VALUE),
