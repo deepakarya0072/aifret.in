@@ -172,6 +172,14 @@ test('PUT product update succeeds against a real SQLite schema and updates offer
   assert.equal(unchanged.image, 'https://images.example.test/collared.jpg');
   assert.equal(unchanged.name, 'Collared Neck Updated');
 });
+
+test('admin image flow keeps additional images separate until explicitly promoted', async () => {
+  const adminText = await readFile(new URL('../assets/js/admin.js', import.meta.url), 'utf8');
+  assert.match(adminText, /data-use-extra-image/);
+  assert.match(adminText, /Additional image selected as the Main Image/);
+  assert.match(adminText, /image: imageUrl/);
+  assert.match(adminText, /additional_images: additionalImagesList\.slice\(\)/);
+});
 const runnableWorker = workerText
   .replace('export async function onRequest(context)', 'async function onRequest(context)')
   .concat('\nglobalThis.worker = onRequest;');

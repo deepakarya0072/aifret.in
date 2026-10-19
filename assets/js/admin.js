@@ -596,7 +596,7 @@ function setupImageHandlers() {
   const showMainPreview = (url) => {
     if (url && isRejectedImageReference(url)) {
       selectedMainImage = '';
-      mainUrlInput.value = '';
+      mainUrlInput.setAttribute('aria-invalid', 'true');
       mainPreviewWrap.hidden = true;
       statusEl.textContent = 'Use a direct HTTPS image URL or upload an image file. Marketplace product links cannot be used as images.';
       statusEl.style.color = 'var(--danger)';
@@ -604,6 +604,7 @@ function setupImageHandlers() {
     }
     selectedMainImage = url;
     mainUrlInput.value = url;
+    mainUrlInput.removeAttribute('aria-invalid');
     mainPreview.src = url;
     mainPreviewWrap.hidden = !url;
     mainPreview.onerror = () => {
@@ -714,6 +715,16 @@ function setupImageHandlers() {
   });
 
   extraPreviewContainer.addEventListener('click', (event) => {
+    const useAsMainButton = event.target.closest('[data-use-extra-image]');
+    if (useAsMainButton) {
+      const image = additionalImagesList[Number(useAsMainButton.dataset.useExtraImage)];
+      if (image) {
+        showMainPreview(image);
+        statusEl.textContent = 'Additional image selected as the Main Image.';
+        statusEl.style.color = 'var(--success)';
+      }
+      return;
+    }
     const removeButton = event.target.closest('[data-remove-extra-image]');
     if (!removeButton) return;
     additionalImagesList.splice(Number(removeButton.dataset.removeExtraImage), 1);
@@ -727,6 +738,7 @@ function renderExtraPreviews() {
   container.innerHTML = additionalImagesList.map((url, index) => `
     <div class="admin-gallery-preview-item">
       <img src="${escapeHtml(url)}" class="admin-gallery-thumb" alt="Additional preview" onerror="this.style.display='none';" />
+      <button type="button" class="btn btn-secondary btn-small" data-use-extra-image="${index}">Use as Main</button>
       <button type="button" class="btn btn-secondary btn-small" data-remove-extra-image="${index}">Remove</button>
     </div>
   `).join('');
@@ -848,6 +860,14 @@ async function handleProductSubmit(event) {
       mainImageUrl.setAttribute('aria-invalid', 'true');
       mainImageUrl.focus();
     }
+    return;
+  }
+
+  if (imageUrl && isRejectedImageReference(imageUrl)) {
+    statusEl.textContent = 'Main Image must be a direct HTTPS image URL, not a marketplace product link.';
+    statusEl.style.color = 'var(--danger)';
+    form.elements.imageUrl.setAttribute('aria-invalid', 'true');
+    form.elements.imageUrl.focus();
     return;
   }
 
