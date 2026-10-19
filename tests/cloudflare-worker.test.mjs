@@ -74,6 +74,11 @@ class MemoryD1 {
 }
 
 const workerText = await readFile(new URL('../functions/api/[[path]].js', import.meta.url), 'utf8');
+test('product creation SQL keeps D1 product columns and placeholders aligned', () => {
+  const insert = workerText.match(/INSERT INTO products \([\s\S]*?\) VALUES \([\s\S]*?\)`/i);
+  assert.ok(insert, 'product creation INSERT statement should exist');
+  assert.equal((insert[0].match(/\?/g) || []).length, 39);
+});
 const runnableWorker = workerText
   .replace('export async function onRequest(context)', 'async function onRequest(context)')
   .concat('\nglobalThis.worker = onRequest;');
