@@ -574,54 +574,93 @@ function setupImageHandlers() {
   const mainFileInput = document.querySelector('[data-admin-image-file]');
   const mainUrlInput = document.querySelector('[data-admin-image-url]');
   const mainPreview = document.querySelector('[data-admin-image-preview]');
+  const mainPreviewWrap = document.querySelector('[data-admin-image-preview-wrap]');
+  const mainDropzone = document.querySelector('[data-admin-image-dropzone]');
+  const mainRemoveButton = document.querySelector('[data-admin-image-remove]');
   const statusEl = document.querySelector('[data-admin-status]');
+
+  if (!mainFileInput || !mainUrlInput || !mainPreview || !mainPreviewWrap || !mainDropzone || !mainRemoveButton || !statusEl) return;
+
+  const showMainPreview = (url) => {
+    selectedMainImage = url;
+    mainUrlInput.value = url;
+    mainPreview.src = url;
+    mainPreviewWrap.hidden = !url;
+  };
+
+  const uploadMainFile = async (file) => {
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      throw new Error('Choose a JPG, PNG, or WebP image.');
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      throw new Error('Image file exceeds the 10 MB limit.');
+    }
+    statusEl.textContent = 'Uploading main image...';
+    statusEl.style.color = 'var(--muted)';
+    showMainPreview(await uploadFileToServer(file));
+    statusEl.textContent = 'Main image uploaded successfully.';
+    statusEl.style.color = 'var(--success)';
+  };
 
   mainFileInput.addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
-      statusEl.textContent = 'Choose a JPEG, PNG, or WebP image.';
-      statusEl.style.color = 'var(--danger)';
-      e.target.value = '';
-      return;
-    }
-    if (file.size > 10 * 1024 * 1024) {
-      statusEl.textContent = 'Image file exceeds 10 MB limit.';
-      statusEl.style.color = 'var(--danger)';
-      e.target.value = '';
-      return;
-    }
-    statusEl.textContent = 'Uploading main image...';
     try {
-      const url = await uploadFileToServer(file);
-      selectedMainImage = url;
-      mainUrlInput.value = url;
-      mainPreview.src = url;
-      mainPreview.hidden = false;
-      statusEl.textContent = 'Main image uploaded successfully!';
-      statusEl.style.color = 'var(--success)';
+      await uploadMainFile(file);
+    } catch (err) {
+      statusEl.textContent = `Upload error: ${err.message}`;
+      statusEl.style.color = 'var(--danger)';
+    } finally {
+      e.target.value = '';
+    }
+  });
+
+  mainDropzone.addEventListener('click', () => mainFileInput.click());
+  mainDropzone.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      mainFileInput.click();
+    }
+  });
+  ['dragenter', 'dragover'].forEach((eventName) => mainDropzone.addEventListener(eventName, (event) => {
+    event.preventDefault();
+    mainDropzone.classList.add('is-dragging');
+  }));
+  ['dragleave', 'drop'].forEach((eventName) => mainDropzone.addEventListener(eventName, (event) => {
+    event.preventDefault();
+    mainDropzone.classList.remove('is-dragging');
+  }));
+  mainDropzone.addEventListener('drop', async (event) => {
+    const file = event.dataTransfer.files[0];
+    if (!file) return;
+    try {
+      await uploadMainFile(file);
     } catch (err) {
       statusEl.textContent = `Upload error: ${err.message}`;
       statusEl.style.color = 'var(--danger)';
     }
   });
+  mainRemoveButton.addEventListener('click', () => {
+    showMainPreview('');
+    mainFileInput.value = '';
+    statusEl.textContent = 'Main image removed. Add an image before publishing.';
+    statusEl.style.color = 'var(--muted)';
+  });
 
   mainUrlInput.addEventListener('input', () => {
     const url = mainUrlInput.value.trim();
     if (url) {
-      selectedMainImage = url;
-      mainPreview.src = url;
-      mainPreview.hidden = false;
+      showMainPreview(url);
     } else {
-      selectedMainImage = '';
-      mainPreview.hidden = true;
+      showMainPreview('');
     }
   });
 
   // Additional Images
   const extraFilesInput = document.querySelector('[data-admin-extra-files]');
-  const extraUrlsInput = document.querySelector('[data-admin-extra-urls]');
   const extraPreviewContainer = document.querySelector('[data-admin-extra-preview]');
+
+  if (!extraFilesInput || !extraPreviewContainer) return;
 
   extraFilesInput.addEventListener('change', async (e) => {
     const files = Array.from(e.target.files);
@@ -641,7 +680,6 @@ function setupImageHandlers() {
         failures.push(`${file.name}: ${err.message}`);
       }
     }
-    extraUrlsInput.value = additionalImagesList.join(', ');
     renderExtraPreviews();
     statusEl.textContent = failures.length
       ? `Some images could not be uploaded: ${failures.join('; ')}`
@@ -649,17 +687,22 @@ function setupImageHandlers() {
     statusEl.style.color = failures.length ? 'var(--danger)' : 'var(--success)';
   });
 
-  extraUrlsInput.addEventListener('input', () => {
-    const urls = extraUrlsInput.value.split(',').map(s => s.trim()).filter(Boolean);
-    additionalImagesList = urls;
+  extraPreviewContainer.addEventListener('click', (event) => {
+    const removeButton = event.target.closest('[data-remove-extra-image]');
+    if (!removeButton) return;
+    additionalImagesList.splice(Number(removeButton.dataset.removeExtraImage), 1);
     renderExtraPreviews();
   });
 }
 
 function renderExtraPreviews() {
   const container = document.querySelector('[data-admin-extra-preview]');
-  container.innerHTML = additionalImagesList.map(url => `
-    <img src="${escapeHtml(url)}" class="admin-gallery-thumb" alt="Additional preview" onerror="this.style.display='none';" />
+  if (!container) return;
+  container.innerHTML = additionalImagesList.map((url, index) => `
+    <div class="admin-gallery-preview-item">
+      <img src="${escapeHtml(url)}" class="admin-gallery-thumb" alt="Additional preview" onerror="this.style.display='none';" />
+      <button type="button" class="btn btn-secondary btn-small" data-remove-extra-image="${index}">Remove</button>
+    </div>
   `).join('');
 }
 
@@ -685,12 +728,21 @@ function populateFormForEdit(product) {
   );
   form.elements.affiliate_url.value = primaryOffer?.affiliate_url || '';
   form.elements.imageUrl.value = product.image || '';
+  const mainPreview = document.querySelector('[data-admin-image-preview]');
+  const mainPreviewWrap = document.querySelector('[data-admin-image-preview-wrap]');
+  if (mainPreview && mainPreviewWrap && product.image) {
+    selectedMainImage = product.image;
+    mainPreview.src = product.image;
+    mainPreviewWrap.hidden = false;
+  }
   form.elements.model_number.value = product.model_number || '';
   form.elements.availability.value = product.availability || 'In Stock';
   form.elements.stock_status.value = product.stock_status || 'in_stock';
   form.elements.status.value = product.status || 'active';
   form.elements.featured.checked = product.featured === 1 || product.featured === true;
   form.elements.best_value.checked = product.best_value === 1 || product.best_value === true;
+  additionalImagesList = Array.isArray(product.additional_images) ? product.additional_images.filter(Boolean) : [];
+  renderExtraPreviews();
 
   updateDiscountCalculation();
 
@@ -714,6 +766,11 @@ function resetProductForm() {
   form.reset();
   form.elements.discount.value = '';
   form.elements.status.value = 'inactive';
+  const mainPreviewWrap = document.querySelector('[data-admin-image-preview-wrap]');
+  const mainFileInput = document.querySelector('[data-admin-image-file]');
+  if (mainPreviewWrap) mainPreviewWrap.hidden = true;
+  if (mainFileInput) mainFileInput.value = '';
+  renderExtraPreviews();
   renderOffersList([]);
 
   document.querySelector('[data-admin-form-title]').textContent = 'Add New Product';
@@ -748,7 +805,7 @@ async function handleProductSubmit(event) {
 
   // Validation
   const status = form.elements.status.value;
-  if (!name || !brand || !category || !marketplace || !product_url || !imageUrl) {
+  if (!name || !brand || !category || !marketplace || !product_url || (status === 'active' && !imageUrl)) {
     statusEl.textContent = 'Please fill out all required fields marked with *.';
     statusEl.style.color = 'var(--danger)';
     return;
@@ -775,7 +832,7 @@ async function handleProductSubmit(event) {
     product_url,
     affiliate_url: form.elements.affiliate_url.value.trim(),
     image: imageUrl,
-    additional_images: [],
+    additional_images: additionalImagesList.slice(),
     description: '',
     short_description: '',
     detailed_description: '',
@@ -803,6 +860,8 @@ async function handleProductSubmit(event) {
   };
 
   try {
+    const submitButton = document.querySelector('[data-admin-submit]');
+    if (submitButton) submitButton.disabled = true;
     let res;
     if (editingProductId) {
       res = await adminFetch(`/api/products/${encodeURIComponent(editingProductId)}`, {
@@ -831,6 +890,9 @@ async function handleProductSubmit(event) {
   } catch (err) {
     statusEl.textContent = `Server error: ${err.message}`;
     statusEl.style.color = 'var(--danger)';
+  } finally {
+    const submitButton = document.querySelector('[data-admin-submit]');
+    if (submitButton) submitButton.disabled = false;
   }
 }
 
@@ -956,6 +1018,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // Discount calculation listeners
   document.querySelector('[data-calc-mrp]').addEventListener('input', updateDiscountCalculation);
   document.querySelector('[data-calc-discount]').addEventListener('input', updateDiscountCalculation);
+
+  // Main product image upload and URL preview
+  setupImageHandlers();
 
   // Add offer row button
   document.querySelector('[data-add-offer]').addEventListener('click', () => {

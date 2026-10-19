@@ -177,9 +177,27 @@
               <label class="admin-full">Primary Affiliate URL
                 <input name="affiliate_url" type="url" placeholder="Optional tracking-enabled destination URL" />
               </label>
-              <label class="admin-full">Main Image *
-                <input name="imageUrl" type="url" required placeholder="https://example.com/product.jpg" />
+              <label class="admin-full">Main Image <span class="form-help-inline">(required for publishing)</span>
+                <input name="imageUrl" type="url" data-admin-image-url placeholder="https://example.com/product.jpg" />
+                <small class="form-help">Upload a JPEG, PNG, or WebP file, or paste an HTTPS image URL.</small>
+                <div class="admin-image-dropzone" data-admin-image-dropzone tabindex="0" role="button" aria-label="Choose or drop the main product image">
+                  <span class="admin-image-dropzone-icon" aria-hidden="true">↥</span>
+                  <strong>Drop main image here</strong>
+                  <span>or click to browse · JPG, PNG, WEBP · max 10 MB</span>
+                  <input type="file" accept="image/jpeg,image/png,image/webp" data-admin-image-file aria-label="Upload main product image" hidden />
+                </div>
+                <div class="admin-image-preview-wrap" data-admin-image-preview-wrap hidden>
+                  <img src="" alt="Main product image preview" class="admin-image-preview" data-admin-image-preview />
+                  <button type="button" class="btn btn-secondary btn-small" data-admin-image-remove>Remove image</button>
+                </div>
               </label>
+
+              <div class="admin-full">
+                <label>Additional Product Images <span class="form-help-inline">(optional)</span>
+                  <input type="file" accept="image/jpeg,image/png,image/webp" multiple data-admin-extra-files aria-label="Upload additional product images" />
+                </label>
+                <div class="admin-gallery-preview" data-admin-extra-preview></div>
+              </div>
 
               <label>Model Number
                 <input name="model_number" type="text" placeholder="Optional model/SKU" />
