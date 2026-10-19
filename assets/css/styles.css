@@ -275,6 +275,11 @@ h1 {
   gap: 18px;
 }
 .category-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.category-products-sections { display: grid; gap: 28px; margin-top: 28px; }
+.category-products-section { min-width: 0; }
+.category-products-section .section-head { margin-bottom: 14px; }
+.category-products-section h3 { margin: 0; font-size: 1.2rem; }
+.category-products-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
 .category-card,
 .deal-card,
 .product-card,
@@ -613,6 +618,7 @@ h1 {
 }
 @media (max-width: 640px) {
   .category-grid,
+  .category-products-grid,
   .featured-grid,
   .deals-grid,
   .market-grid,

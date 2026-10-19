@@ -45,6 +45,7 @@ async function fetchProductsFromApi() {
         // Refresh dynamic UI with database products
         renderHeroShowcase();
         renderCategoryCards();
+        renderCategoryProducts();
         renderMarketplaceCards();
         renderFeaturedProducts();
         renderDealsCards();
@@ -361,6 +362,46 @@ function renderCategoryCards() {
   `).join('');
 }
 
+function renderCategoryProducts() {
+  const root = document.querySelector('[data-category-products]');
+  if (!root) return;
+
+  const products = uniqueProducts(getProducts())
+    .filter((product) => product.status !== 'inactive' && product.category)
+    .map((product) => normalizeProduct(product));
+  const grouped = new Map();
+
+  products.forEach((product) => {
+    const category = product.category.trim();
+    if (!grouped.has(category)) grouped.set(category, []);
+    grouped.get(category).push(product);
+  });
+
+  root.innerHTML = Array.from(grouped.entries())
+    .sort(([first], [second]) => first.localeCompare(second))
+    .map(([category, categoryProducts]) => {
+      categoryProducts.sort((first, second) => {
+        const featuredScore = Number(second.featured === 1 || second.featured === true) - Number(first.featured === 1 || first.featured === true);
+        return featuredScore || String(first.name || '').localeCompare(String(second.name || ''));
+      });
+      const slug = category.toLowerCase().replace(/\s+/g, '-');
+      return `
+        <section class="category-products-section" aria-labelledby="category-${slug}">
+          <div class="section-head">
+            <div>
+              <span class="section-kicker">${category}</span>
+              <h3 id="category-${slug}">${category} products</h3>
+            </div>
+            <a href="deals.html?category=${encodeURIComponent(slug)}">View all</a>
+          </div>
+          <div class="category-products-grid">
+            ${categoryProducts.slice(0, 3).map((product) => renderProductCard(product, 'featured')).join('')}
+          </div>
+        </section>
+      `;
+    }).join('');
+}
+
 function renderMarketplaceCards() {
   const root = document.querySelector('[data-market-grid]');
   if (!root) return;
@@ -453,7 +494,6 @@ function renderProductCard(product, mode = 'featured') {
 
         <div class="card-actions" style="display: flex; gap: 8px;">
           ${dealUrl ? `<a href="${dealUrl}" class="btn btn-primary" target="_blank" rel="noopener noreferrer" style="flex: 1;">View Deal</a>` : '<span class="btn btn-secondary" aria-disabled="true" style="flex: 1;">Deal unavailable</span>'}
-          <a href="product.html?id=${product.id}" class="btn btn-secondary btn-small" title="Compare Prices across stores">Compare</a>
         </div>
       </div>
     </article>
@@ -1080,6 +1120,7 @@ function initializePage() {
   // Initial render with cached/fallback data
   renderHeroShowcase();
   renderCategoryCards();
+  renderCategoryProducts();
   renderMarketplaceCards();
   renderFeaturedProducts();
   renderDealsCards();
@@ -1110,6 +1151,7 @@ window.addEventListener('storage', (event) => {
   }
   renderHeroShowcase();
   renderCategoryCards();
+  renderCategoryProducts();
   renderMarketplaceCards();
   renderFeaturedProducts();
   renderDealsCards();
