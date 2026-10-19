@@ -14,6 +14,7 @@ import os
 import sys
 import json
 import sqlite3
+import traceback
 import base64
 import hashlib
 import secrets
@@ -101,6 +102,17 @@ def get_db():
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.execute("PRAGMA journal_mode = WAL;")
     return conn
+
+
+def parse_stored_json(value, fallback):
+    """Read legacy JSON columns without making product edits fail."""
+    if value is None or value == '':
+        return fallback
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return fallback
+    return fallback if parsed is None else parsed
 
 def hash_password(password: str, salt: str = None) -> tuple:
     if salt is None:
@@ -2152,10 +2164,19 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
             conn.close()
             self.send_error_json("Product could not be saved because a unique value already exists", status=409)
             return
-        except sqlite3.Error:
+        except sqlite3.Error as error:
             conn.rollback()
             conn.close()
-            self.send_error_json("Product could not be saved. Please try again.", status=500)
+            print(f"[AIFRET API] Product creation database error: {error}", file=sys.stderr)
+            traceback.print_exc()
+            self.send_error_json(f"Product creation database error: {error}", status=500)
+            return
+        except Exception as error:
+            conn.rollback()
+            conn.close()
+            print(f"[AIFRET API] Unexpected product creation error: {error}", file=sys.stderr)
+            traceback.print_exc()
+            self.send_error_json(f"Product creation error: {error}", status=500)
             return
         conn.close()
 
@@ -2223,9 +2244,9 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
             description = str(body.get('description', existing['description']) or '').strip()
             short_description = str(body.get('short_description', existing['short_description']) or '').strip()
             detailed_description = str(body.get('detailed_description', existing['detailed_description'] or description) or '').strip()
-            key_features = body.get('key_features', json.loads(existing['key_features'] or '[]'))
-            specifications = body.get('specifications', json.loads(existing['specifications'] or '{}'))
-            variants = body.get('variants', json.loads(existing['variants'] or '[]'))
+            key_features = body.get('key_features') if 'key_features' in body else parse_stored_json(existing['key_features'], [])
+            specifications = body.get('specifications') if 'specifications' in body else parse_stored_json(existing['specifications'], {})
+            variants = body.get('variants') if 'variants' in body else parse_stored_json(existing['variants'], [])
             if not isinstance(key_features, list) or not isinstance(specifications, dict) or not isinstance(variants, list):
                 raise ValueError("Features, specifications, and variants must use valid list/object values")
             model_number = str(body.get('model_number', existing['model_number']) or '').strip()
@@ -2239,7 +2260,7 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
             product_video_url = validate_web_url(body.get('product_video_url', existing['product_video_url']), "Product video URL", required=False)
             warranty_info = str(body.get('warranty_info', existing['warranty_info']) or '').strip()
             image = validate_image_reference(body.get('image', existing['image']))
-            additional_images = body.get('additional_images', json.loads(existing['additional_images'] or '[]'))
+            additional_images = body.get('additional_images') if 'additional_images' in body else parse_stored_json(existing['additional_images'], [])
             if not isinstance(additional_images, list) or not all(isinstance(url, str) for url in additional_images):
                 raise ValueError("Additional images must be a list of image URLs")
             additional_images = [validate_image_reference(url) for url in additional_images]
@@ -2368,10 +2389,19 @@ class AifretRequestHandler(SimpleHTTPRequestHandler):
             conn.close()
             self.send_error_json(str(error))
             return
-        except sqlite3.Error:
+        except sqlite3.Error as error:
             conn.rollback()
             conn.close()
-            self.send_error_json("Product could not be updated. Please try again.", status=500)
+            print(f"[AIFRET API] Product update database error for {product_id}: {error}", file=sys.stderr)
+            traceback.print_exc()
+            self.send_error_json(f"Product update database error: {error}", status=500)
+            return
+        except Exception as error:
+            conn.rollback()
+            conn.close()
+            print(f"[AIFRET API] Unexpected product update error for {product_id}: {error}", file=sys.stderr)
+            traceback.print_exc()
+            self.send_error_json(f"Product update error: {error}", status=500)
             return
         conn.close()
 
