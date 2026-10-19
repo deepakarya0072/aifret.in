@@ -312,6 +312,7 @@ function validateImageReference(value) {
 
 function rejectProductDestinationAsImage(imageUrl, productUrl) {
   if (!imageUrl) return;
+  if (imageUrl.startsWith('/api/uploads/') || imageUrl.startsWith('/uploads/')) return;
   if (productUrl && imageUrl === productUrl) {
     throw Object.assign(new Error('Main image URL must point to an image, not the marketplace product page'), { status: 400 });
   }

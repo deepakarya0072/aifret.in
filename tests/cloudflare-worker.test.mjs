@@ -119,6 +119,22 @@ test('PUT product update succeeds against a real SQLite schema and updates offer
     await readFile(new URL('../migrations/0002_affiliate_import_currency.sql', import.meta.url), 'utf8')
   ];
   const db = new SqliteD1(schema.join('\n'));
+  const storedImages = new Map();
+  const imageBucket = {
+    async put(key, bytes, options) {
+      storedImages.set(key, { bytes: Uint8Array.from(bytes), contentType: options.httpMetadata.contentType });
+    },
+    async get(key) {
+      const stored = storedImages.get(key);
+      if (!stored) return null;
+      return {
+        body: stored.bytes,
+        httpEtag: '"test-image"',
+        writeHttpMetadata(headers) { headers.set('Content-Type', stored.contentType); }
+      };
+    }
+  };
+  const env = { AIFRET_DB: db, AIFRET_IMAGES: imageBucket };
   const token = 'test-update-session';
   const tokenHash = Buffer.from(await webcrypto.subtle.digest('SHA-256', new TextEncoder().encode(token))).toString('hex');
   const timestamp = new Date().toISOString();
@@ -141,13 +157,24 @@ test('PUT product update succeeds against a real SQLite schema and updates offer
     .run('offer-old', 'collared-neck-5bdc30', 'Amazon', 638, 2199, 'https://www.amazon.in/dp/TEST',
       'https://www.amazon.in/dp/TEST?tag=aifret-21', 'In Stock', timestamp);
 
-  const response = await request({ AIFRET_DB: db }, '/api/products/collared-neck-5bdc30', {
+  const upload = await request(env, '/api/upload', {
+    method: 'POST', cookie: `aifret_session=${token}`,
+    body: { data: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=' }
+  });
+  assert.equal(upload.status, 200);
+  const uploadedUrl = (await upload.json()).url;
+  assert.match(uploadedUrl, /^\/api\/uploads\/products\//);
+  const uploadedImage = await request(env, uploadedUrl);
+  assert.equal(uploadedImage.status, 200);
+  assert.equal(uploadedImage.headers.get('Content-Type'), 'image/png');
+
+  const response = await request(env, '/api/products/collared-neck-5bdc30', {
     method: 'PUT',
     cookie: `aifret_session=${token}`,
     body: {
       name: 'Collared Neck Updated', brand: 'AIFRET', category: 'Fashion', marketplace: 'Amazon',
       mrp: 2499, selling_price: 749, product_url: 'https://www.amazon.in/dp/TEST',
-      affiliate_url: 'https://www.amazon.in/dp/TEST?tag=aifret-21', image: 'https://images.example.test/collared.jpg',
+      affiliate_url: 'https://www.amazon.in/dp/TEST?tag=aifret-21', image: uploadedUrl,
       stock_status: 'in_stock', status: 'active', featured: 1, best_value: 1,
       offers: [{ marketplace: 'Flipkart', price: 799, mrp: 2499,
         product_url: 'https://www.flipkart.com/item/TEST', affiliate_url: 'https://www.flipkart.com/item/TEST?affid=aifret' }]
@@ -158,9 +185,13 @@ test('PUT product update succeeds against a real SQLite schema and updates offer
   assert.equal(result.success, true);
   assert.equal(result.product.name, 'Collared Neck Updated');
   assert.equal(result.product.discount, 70);
+  assert.equal(result.product.image, uploadedUrl);
   assert.deepEqual(result.product.offers.map((offer) => offer.marketplace), ['Amazon', 'Flipkart']);
+  const reloaded = await request(env, '/api/products/collared-neck-5bdc30');
+  assert.equal(reloaded.status, 200);
+  assert.equal((await reloaded.json()).product.image, uploadedUrl);
 
-  const invalidImage = await request({ AIFRET_DB: db }, '/api/products/collared-neck-5bdc30', {
+  const invalidImage = await request(env, '/api/products/collared-neck-5bdc30', {
     method: 'PUT', cookie: `aifret_session=${token}`,
     body: { image: 'https://amzn.in/d/08klyARP', status: 'active' }
   });
@@ -169,7 +200,7 @@ test('PUT product update succeeds against a real SQLite schema and updates offer
   assert.match(invalidImageResult.message, /marketplace short link/i);
   assert.equal('stack' in invalidImageResult, false);
   const unchanged = db.sqlite.prepare('SELECT image, name FROM products WHERE id = ?').get('collared-neck-5bdc30');
-  assert.equal(unchanged.image, 'https://images.example.test/collared.jpg');
+  assert.equal(unchanged.image, uploadedUrl);
   assert.equal(unchanged.name, 'Collared Neck Updated');
 });
 
@@ -177,6 +208,8 @@ test('admin image flow keeps additional images separate until explicitly promote
   const adminText = await readFile(new URL('../assets/js/admin.js', import.meta.url), 'utf8');
   assert.match(adminText, /data-use-extra-image/);
   assert.match(adminText, /Additional image selected as the Main Image/);
+  assert.match(adminText, /URL\.createObjectURL\(file\)/);
+  assert.match(adminText, /Main image could not be loaded/);
   assert.match(adminText, /image: imageUrl/);
   assert.match(adminText, /additional_images: additionalImagesList\.slice\(\)/);
 });

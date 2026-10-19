@@ -6,6 +6,7 @@
 let adminProducts = [];
 let editingProductId = null;
 let selectedMainImage = '';
+let mainImageReady = false;
 let additionalImagesList = [];
 const PRODUCT_PLACEHOLDER = '/assets/images/product-placeholder.svg';
 let pendingDeleteProductId = null;
@@ -593,22 +594,28 @@ function setupImageHandlers() {
 
   if (!mainFileInput || !mainUrlInput || !mainPreview || !mainPreviewWrap || !mainDropzone || !mainRemoveButton || !statusEl) return;
 
-  const showMainPreview = (url) => {
-    if (url && isRejectedImageReference(url)) {
+  const showMainPreview = (url, { localPreview = false } = {}) => {
+    if (url && !localPreview && isRejectedImageReference(url)) {
       selectedMainImage = '';
+      mainImageReady = false;
       mainUrlInput.setAttribute('aria-invalid', 'true');
       mainPreviewWrap.hidden = true;
       statusEl.textContent = 'Use a direct HTTPS image URL or upload an image file. Marketplace product links cannot be used as images.';
       statusEl.style.color = 'var(--danger)';
       return;
     }
-    selectedMainImage = url;
-    mainUrlInput.value = url;
+    selectedMainImage = localPreview ? '' : url;
+    mainImageReady = false;
+    mainUrlInput.value = localPreview ? '' : url;
     mainUrlInput.removeAttribute('aria-invalid');
+    mainPreview.onload = () => {
+      mainImageReady = !localPreview;
+    };
     mainPreview.src = url;
     mainPreviewWrap.hidden = !url;
     mainPreview.onerror = () => {
       selectedMainImage = '';
+      mainImageReady = false;
       mainPreviewWrap.hidden = true;
       statusEl.textContent = 'This image could not be loaded. Upload a file or use another direct image URL.';
       statusEl.style.color = 'var(--danger)';
@@ -624,9 +631,23 @@ function setupImageHandlers() {
     }
     statusEl.textContent = 'Uploading main image...';
     statusEl.style.color = 'var(--muted)';
-    showMainPreview(await uploadFileToServer(file));
-    statusEl.textContent = 'Main image uploaded successfully.';
-    statusEl.style.color = 'var(--success)';
+    const localUrl = URL.createObjectURL(file);
+    showMainPreview(localUrl, { localPreview: true });
+    try {
+      const uploadedUrl = await uploadFileToServer(file);
+      URL.revokeObjectURL(localUrl);
+      showMainPreview(uploadedUrl);
+      statusEl.textContent = 'Main image uploaded successfully.';
+      statusEl.style.color = 'var(--success)';
+    } catch (error) {
+      selectedMainImage = '';
+      mainImageReady = false;
+      mainUrlInput.value = '';
+      mainUrlInput.setAttribute('aria-invalid', 'true');
+      statusEl.textContent = `Upload error: ${error.message}. The preview is local only; upload a valid image before saving.`;
+      statusEl.style.color = 'var(--danger)';
+      throw error;
+    }
   };
 
   mainFileInput.addEventListener('change', async (e) => {
@@ -751,6 +772,7 @@ function renderExtraPreviews() {
 function populateFormForEdit(product) {
   editingProductId = product.id;
   selectedMainImage = '';
+  mainImageReady = false;
   const form = document.querySelector('[data-admin-form]');
 
   form.elements.name.value = product.name || '';
@@ -801,6 +823,7 @@ function populateFormForEdit(product) {
 function resetProductForm() {
   editingProductId = null;
   selectedMainImage = '';
+  mainImageReady = false;
   additionalImagesList = [];
 
   const form = document.querySelector('[data-admin-form]');
@@ -860,6 +883,14 @@ async function handleProductSubmit(event) {
       mainImageUrl.setAttribute('aria-invalid', 'true');
       mainImageUrl.focus();
     }
+    return;
+  }
+
+  if (imageUrl && !mainImageReady) {
+    statusEl.textContent = 'Main image could not be loaded. Upload the file again or use a direct HTTPS image URL.';
+    statusEl.style.color = 'var(--danger)';
+    form.elements.imageUrl.setAttribute('aria-invalid', 'true');
+    form.elements.imageUrl.focus();
     return;
   }
 
