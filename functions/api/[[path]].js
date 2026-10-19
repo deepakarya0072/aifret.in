@@ -310,6 +310,17 @@ function validateImageReference(value) {
   return validateWebUrl(result, 'Image URL');
 }
 
+function rejectProductDestinationAsImage(imageUrl, productUrl) {
+  if (!imageUrl) return;
+  if (productUrl && imageUrl === productUrl) {
+    throw new Error('Main image URL must point to an image, not the marketplace product page');
+  }
+  const hostname = new URL(imageUrl).hostname.toLowerCase().replace(/\.$/, '');
+  if (['amzn.in', 'amzn.to', 'a.co', 'link.amazon', 'fkrt.it'].includes(hostname)) {
+    throw new Error('Main image URL must point to an image, not a marketplace short link');
+  }
+}
+
 function validateAffiliateUrl(value, fieldName, productUrl, env) {
   const affiliateUrl = validateWebUrl(value, fieldName, false);
   if (!affiliateUrl) return '';
@@ -555,6 +566,7 @@ async function addProduct(body, env, db, admin) {
   const marketplace = String(body.marketplace || '').trim();
   const currency = normalizeCurrency(body.currency || 'INR');
   const productUrl = validateWebUrl(body.product_url, 'Marketplace product URL');
+  rejectProductDestinationAsImage(image, productUrl);
   const affiliateUrl = validateAffiliateUrl(body.affiliate_url, 'Affiliate URL', productUrl, env);
   let availability = String(body.availability || 'In Stock').trim();
   const stockStatus = String(body.stock_status || 'in_stock').trim();
@@ -664,6 +676,7 @@ async function updateProduct(productId, body, env, db, admin) {
   const marketplace = String(body.marketplace ?? existing.marketplace).trim();
   const currency = normalizeCurrency(body.currency ?? existing.currency ?? 'INR');
   const productUrl = validateWebUrl(body.product_url ?? existing.product_url, 'Marketplace product URL');
+  rejectProductDestinationAsImage(image, productUrl);
   const affiliateUrl = validateAffiliateUrl(body.affiliate_url ?? primary?.affiliate_url, 'Affiliate URL', productUrl, env);
   let availability = String(body.availability ?? existing.availability).trim();
   const stockStatus = String(body.stock_status ?? existing.stock_status).trim();
